@@ -93,7 +93,10 @@ struct Armor
 
   ArmorType type;
   ArmorName name;
-  ArmorPriority priority;
+  // Armor 的四个构造函数都不会给 priority 赋值，
+  // 原来 Target 构造函数读它等于读一个未初始化的枚举值。
+  // 这里给一个确定初值，语义上「没有优先级信息」就是最低优先级。
+  ArmorPriority priority = ArmorPriority::first;
   int class_id;
   cv::Rect box;
   cv::Mat pattern;
