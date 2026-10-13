@@ -101,6 +101,10 @@ public:
   // 默认 8（无目标）：原来这个字段从来没被赋值，一律发 0，等于每帧都上报「英雄」。
   void send(bool control, bool fire, float yaw, float pitch, uint8_t target = 8);
 
+  // 回放模式：不打开串口、不启动线程，姿态与弹速从录包的 frames.csv 里取。
+  // 由配置里的 replay_dir 或环境变量 DSH_REPLAY_DIR 触发。
+  bool replay() const { return replay_enabled_; }
+
 private:
   serial::Serial serial_;
 
@@ -118,6 +122,11 @@ private:
   GimbalState state_;
   tools::ThreadSafeQueue<std::tuple<Eigen::Quaterniond, std::chrono::steady_clock::time_point>>
     queue_{1000};
+
+  // 回放模式用
+  bool replay_enabled_ = false;
+  GimbalState replay_state_;  // 每次 q(t) 时从录包取出来的状态
+  GimbalMode replay_mode_ = GimbalMode::IDLE;
 
   bool read(uint8_t * buffer, size_t size);
   void read_thread();

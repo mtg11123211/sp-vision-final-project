@@ -1,11 +1,14 @@
 #include "gimbal.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <thread>
 
 #include "tools/crc.hpp"
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
+#include "tools/recorder.hpp"
+#include "tools/replay.hpp"
 #include "tools/yaml.hpp"
 
 namespace io
@@ -13,6 +16,23 @@ namespace io
 Gimbal::Gimbal(const std::string & config_path)
 {
   auto yaml = tools::load(config_path);
+
+  // ---------- 回放模式（可选）----------
+  // 配置里 replay_dir 非空，或者环境变量 DSH_REPLAY_DIR 非空，就走回放：
+  // 不开串口、不起线程，姿态和弹速从录包的 frames.csv 里取。
+  // 这样没有真云台也能把整条链路跑起来。
+  std::string replay_dir = tools::replay::env_dir("DSH_REPLAY_DIR");
+  if (replay_dir.empty()) replay_dir = tools::read_or<std::string>(yaml, "replay_dir", "");
+  if (!replay_dir.empty()) {
+    if (!tools::replay::dataset().load(replay_dir)) {
+      tools::logger()->error("[Gimbal] 回放数据载入失败：{}", replay_dir);
+      exit(1);
+    }
+    replay_enabled_ = true;
+    tools::logger()->info("[Gimbal] 回放模式：不打开串口、不启动读线程");
+    return;
+  }
+
   auto com_port = tools::read<std::string>(yaml, "com_port");
   bool hangging_shoot = tools::read_or<bool>(yaml, "hangging_shoot", false);
   // 显式读取波特率，默认为 921600
@@ -50,19 +70,27 @@ Gimbal::~Gimbal()
 GimbalMode Gimbal::mode() const
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  return mode_;
+  return replay_enabled_ ? replay_mode_ : mode_;
 }
 
 GimbalState Gimbal::state() const
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  return state_;
+  return replay_enabled_ ? replay_state_ : state_;
 }
 
 void Gimbal::send(bool control, bool fire, float yaw, float pitch, uint8_t target)
 {
   if (!std::isfinite(yaw) || !std::isfinite(pitch)) {
     tools::logger()->error("[Gimbal] Invalid control data detected (NaN/Inf)! Packet dropped.");
+    return;
+  }
+
+  // 回放模式没有串口，只把命令记进日志，方便对照「当时发了什么 / 现在会发什么」
+  if (replay_enabled_) {
+    tools::logger()->debug(
+      "[Gimbal][replay] control={} fire={} yaw={:.2f} pitch={:.2f} target={}", control, fire, yaw,
+      pitch, static_cast<int>(target));
     return;
   }
 
@@ -107,21 +135,68 @@ std::string Gimbal::str(GimbalMode mode) const
 
 Eigen::Quaterniond Gimbal::q(std::chrono::steady_clock::time_point t)
 {
+  // ---------- 回放模式 ----------
+  // 时间戳是相机按「原点 + 第几圈乘总时长 + 这一帧在录包里的时刻」产生的，
+  // 这里取模回到录包内部的时间，再查表。两边用的是同一个 origin()，所以对得上。
+  if (replay_enabled_) {
+    const auto & ds = tools::replay::dataset();
+    const double elapsed = tools::delta_time(t, tools::replay::origin());
+    double src = ds.duration() > 1e-9 ? std::fmod(elapsed, ds.duration()) : 0.0;
+    if (src < 0.0) src += ds.duration();
+
+    const tools::replay::Frame fr = ds.sample(src);
+
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      replay_state_.bullet_speed = static_cast<float>(fr.bullet_speed);
+      replay_state_.bullet_count = fr.bullet_count;
+      replay_mode_ = fr.mode == 1   ? GimbalMode::AUTO_AIM
+                     : fr.mode == 2 ? GimbalMode::SMALL_BUFF
+                     : fr.mode == 3 ? GimbalMode::BIG_BUFF
+                                    : GimbalMode::IDLE;
+    }
+
+    tools::Recorder::instance().on_quaternion(
+      fr.q, t, fr.bullet_speed, fr.bullet_count, fr.mode);
+    return fr.q;
+  }
+
+  // ---------- 真云台 ----------
+  Eigen::Quaterniond q_c = Eigen::Quaterniond::Identity();
   while (true) {
     auto [q_a, t_a] = queue_.pop();
     auto [q_b, t_b] = queue_.front();
     auto t_ab = tools::delta_time(t_a, t_b);
     // 同一毫秒内到两包时 t_ab 会等于 0，直接用会算出无穷大的插值系数，
     // slerp 结果就是 NaN。这种情况下两包姿态几乎一样，直接返回前一包。
-    if (std::abs(t_ab) < 1e-6) return q_a.normalized();
+    if (std::abs(t_ab) < 1e-6) {
+      q_c = q_a.normalized();
+      break;
+    }
     auto t_ac = tools::delta_time(t_a, t);
     auto k = t_ac / t_ab;
-    Eigen::Quaterniond q_c = q_a.slerp(k, q_b).normalized();
-    if (t < t_a) return q_c;
+    q_c = q_a.slerp(k, q_b).normalized();
+    if (t < t_a) break;
     if (!(t_a < t && t <= t_b)) continue;
-
-    return q_c;
+    break;
   }
+
+  // 录包的姿态钩子：把这一帧的姿态、弹速、发弹数、挡位交给 Recorder，
+  // 它会和 Camera::read 里存下的那张图配成一行。没开录包时这一句立刻返回。
+  {
+    double bullet_speed = 0.0;
+    uint16_t bullet_count = 0;
+    uint8_t mode = 0;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      bullet_speed = state_.bullet_speed;
+      bullet_count = state_.bullet_count;
+      mode = static_cast<uint8_t>(mode_);
+    }
+    tools::Recorder::instance().on_quaternion(q_c, t, bullet_speed, bullet_count, mode);
+  }
+
+  return q_c;
 }
 
 bool Gimbal::read(uint8_t * buffer, size_t size)
