@@ -10,4 +10,6 @@ add_library(tools OBJECT
     trajectory.cpp
     logger.cpp
     crc.cpp
+    recorder.cpp
+    replay.cpp
 )

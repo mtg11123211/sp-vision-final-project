@@ -9,6 +9,7 @@ add_library(io STATIC
     hikrobot/hikrobot.cpp    
     camera.cpp
     gimbal/gimbal.cpp
+    video/video_camera.cpp
 )
 
 # hikrobot

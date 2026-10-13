@@ -23,3 +23,6 @@ partterns/
 分段提交计划*.md
 调试记录*.md
 *_task1.md
+
+# 录包数据（一般存在工程外，这里再兜一道）
+recordings/

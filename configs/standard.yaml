@@ -82,3 +82,18 @@ task3:
   # 已有滤波器时，允许比三块预测板最高者再高多少米（再挡一次顶部板）
   outpost_top_margin: 0.12
   require_auto_aim_mode: false
+
+#####-----录包与回放（离线拟真用；正式跑车时保持为空）-----#####
+# 非空就把每一帧的图、曝光时刻、云台四元数、弹速写进这个目录。
+# 也可以不改这里，用环境变量覆盖：DSH_RECORD_DIR=/路径 ./build/task_2 configs/standard.yaml
+# 注意录包必须整机上电、电控在发数据（因为要录云台四元数）。
+record_dir: ""
+# 每隔多少帧存一张。1 = 每帧都存；2 = 隔帧存，体积减半
+record_every: 1
+# 存图的 JPEG 质量。95 大约每帧 250 到 400 KB；空间紧张就降到 85
+record_jpeg_quality: 95
+# 非空就从录包回放：图片序列当相机，录下来的四元数当云台，不打开串口。
+# 同样可以用环境变量覆盖：DSH_REPLAY_DIR=/路径 ./build/task_2 configs/standard.yaml
+replay_dir: ""
+# 回放是否循环播放（建议开，方便一直盯着看）
+replay_loop: true
