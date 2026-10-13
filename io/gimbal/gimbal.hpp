@@ -96,7 +96,10 @@ public:
   std::string str(GimbalMode mode) const;
   Eigen::Quaterniond q(std::chrono::steady_clock::time_point t);
 
-  void send(bool control, bool fire, float yaw, float pitch);
+  // target 是发给电控的目标编号，含义见 VisionToGimbal 里的注释：
+  // 0 英雄 / 1 工程 / 2 三号步兵 / 3 四号步兵 / 4 五号步兵 / 5 哨兵 / 6 前哨 / 7 基地 / 8 无目标
+  // 默认 8（无目标）：原来这个字段从来没被赋值，一律发 0，等于每帧都上报「英雄」。
+  void send(bool control, bool fire, float yaw, float pitch, uint8_t target = 8);
 
 private:
   serial::Serial serial_;

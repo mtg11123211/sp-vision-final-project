@@ -59,7 +59,7 @@ GimbalState Gimbal::state() const
   return state_;
 }
 
-void Gimbal::send(bool control, bool fire, float yaw, float pitch)
+void Gimbal::send(bool control, bool fire, float yaw, float pitch, uint8_t target)
 {
   if (!std::isfinite(yaw) || !std::isfinite(pitch)) {
     tools::logger()->error("[Gimbal] Invalid control data detected (NaN/Inf)! Packet dropped.");
@@ -76,6 +76,7 @@ void Gimbal::send(bool control, bool fire, float yaw, float pitch)
   tx_data_.pitch = pitch;
   tx_data_.pitch_vel = 0.0f;  //保持0即可
   tx_data_.pitch_acc = 0.0f;  //保持0即可
+  tx_data_.target = target;   // 目标编号，默认 8（无目标）
   tx_data_.crc16 = tools::get_crc16(
     reinterpret_cast<uint8_t *>(&tx_data_), sizeof(tx_data_) - sizeof(tx_data_.crc16));
 
@@ -110,6 +111,9 @@ Eigen::Quaterniond Gimbal::q(std::chrono::steady_clock::time_point t)
     auto [q_a, t_a] = queue_.pop();
     auto [q_b, t_b] = queue_.front();
     auto t_ab = tools::delta_time(t_a, t_b);
+    // 同一毫秒内到两包时 t_ab 会等于 0，直接用会算出无穷大的插值系数，
+    // slerp 结果就是 NaN。这种情况下两包姿态几乎一样，直接返回前一包。
+    if (std::abs(t_ab) < 1e-6) return q_a.normalized();
     auto t_ac = tools::delta_time(t_a, t);
     auto k = t_ac / t_ab;
     Eigen::Quaterniond q_c = q_a.slerp(k, q_b).normalized();
