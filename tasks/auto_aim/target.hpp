@@ -32,9 +32,21 @@ public:
   void predict(double dt);
   void update(const Armor & armor);
 
+  // 带异常量测门限的更新。
+  // 先照常走一遍 update()，如果这一帧观测的 NIS 超过 nis_reject_threshold，
+  // 就把状态 x 与协方差 P 回滚到更新前（只保留装甲板关联结果 last_id），并返回 false。
+  // 用途：挡住单帧误关联、以及前哨站顶部装甲板这类不属于当前模型的观测。
+  // nis_reject_threshold 建议取 4 自由度卡方分布的 99.7% 分位 16.27
+  // （95% 是 9.488、99% 是 13.28、99.9% 是 18.47）。
+  bool update_checked(const Armor & armor, double nis_reject_threshold);
+
   Eigen::VectorXd ekf_x() const;
   const tools::ExtendedKalmanFilter & ekf() const;
   std::vector<Eigen::Vector4d> armor_xyza_list() const;
+
+  // 当前三块（或四块）装甲板里最高的那块的世界系高度，单位米。
+  // 前哨站的顶部装甲板明细高于三块中部装甲板，用它把顶部板挡在门外。
+  double armor_z_max() const;
 
   bool diverged() const;
 
