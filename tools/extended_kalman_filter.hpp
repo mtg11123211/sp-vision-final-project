@@ -43,6 +43,13 @@ public:
   size_t window_size = 100;
   double last_nis;
 
+  // 卡方检验阈值。原来的 1.5 是用错了的：本项目观测量是 4 维（yaw、pitch、距离、板朝向），
+  // NIS 服从 4 自由度卡方分布，均值就是 4，阈值取 1.5 会把绝大多数正常帧都记成「失败」。
+  //   9.488  = 4 自由度 95% 分位，用于统计 recent_nis_failures
+  //   19.68  = 11 自由度 95% 分位（状态维数），用于 NEES
+  double nis_threshold = 9.488;
+  double nees_threshold = 19.68;
+
 private:
   Eigen::MatrixXd I;
   std::function<Eigen::VectorXd(const Eigen::VectorXd &, const Eigen::VectorXd &)> x_add;

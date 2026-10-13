@@ -65,10 +65,10 @@ Eigen::VectorXd ExtendedKalmanFilter::update(
   double nis = residual.transpose() * S.inverse() * residual;
   double nees = (x - x_prior).transpose() * P.inverse() * (x - x_prior);
 
-  // 卡方检验阈值（自由度=4，取置信水平95%）
-  constexpr double nis_threshold = 1.5;
-  constexpr double nees_threshold = 1.5;
-
+  // 卡方检验阈值见头文件里的注释：
+  // 观测量 4 维，NIS 服从 4 自由度卡方分布，阈值用 95% 分位 9.488；
+  // 状态 11 维，NEES 用 11 自由度 95% 分位 19.68。
+  // （原来是 1.5，会把正常帧大量误判成失败，使 recent_nis_failures 失去意义。）
   if (nis > nis_threshold) nis_count_++, data["nis_fail"] = 1;
   if (nees > nees_threshold) nees_count_++, data["nees_fail"] = 1;
   total_count_++;
