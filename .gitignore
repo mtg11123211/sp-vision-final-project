@@ -14,3 +14,12 @@ watchdog.sh
 records_24/
 records_25/
 partterns/
+
+# 自用文档不提交（沿用既有约定）
+代码讲解手册*.md
+使用说明*.md
+排障手册*.md
+防拷打方案*.md
+分段提交计划*.md
+调试记录*.md
+*_task1.md
