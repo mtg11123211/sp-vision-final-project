@@ -3,6 +3,7 @@
 #include <fmt/chrono.h>
 #include <yaml-cpp/yaml.h>
 
+#include <cstdlib>
 #include <filesystem>
 
 #include "tools/img_tools.hpp"
@@ -16,6 +17,13 @@ YOLOV5::YOLOV5(const std::string & config_path, bool debug) : debug_(debug)
 
   model_path_ = yaml["yolov5_model_path"].as<std::string>();
   device_ = yaml["device"].as<std::string>();
+  // 允许用环境变量临时覆盖推理设备。
+  // 用途：没有 Intel 核显的虚拟机里跑离线回放时，用 DSH_DEVICE=CPU 就能起来，
+  // 而配置文件里保持 GPU 不动，车上还是走核显。配置和车上的行为都不受影响。
+  if (const char * env_device = std::getenv("DSH_DEVICE")) {
+    device_ = env_device;
+    tools::logger()->warn("[YOLOV5] 推理设备被环境变量覆盖为：{}", device_);
+  }
   binary_threshold_ = yaml["threshold"].as<double>();
   min_confidence_ = yaml["min_confidence"].as<double>();
   int x = 0, y = 0, width = 0, height = 0;
@@ -48,8 +56,21 @@ YOLOV5::YOLOV5(const std::string & config_path, bool debug) : debug_(debug)
 
   // TODO: ov::hint::performance_mode(ov::hint::PerformanceMode::LATENCY)
   model = ppp.build();
-  compiled_model_ = core_.compile_model(
-    model, device_, ov::hint::performance_mode(ov::hint::PerformanceMode::LATENCY));
+
+  // 先用配置里指定的设备（车上默认是 GPU，走 Intel 核显）。
+  // 如果这台机器没有可用的 GPU——比如没有 Intel 核显的虚拟机——就自动退回 CPU：
+  // 推理慢一些，但至少能跑起来做离线回放，不会一上来就 abort。
+  // 车上 GPU 正常时这段 try 直接成功，行为一点不变。
+  try {
+    compiled_model_ = core_.compile_model(
+      model, device_, ov::hint::performance_mode(ov::hint::PerformanceMode::LATENCY));
+  } catch (const std::exception & e) {
+    if (device_ == "CPU") throw;
+    tools::logger()->warn("[YOLOV5] 用 {} 编译失败，自动退回 CPU：{}", device_, e.what());
+    device_ = "CPU";
+    compiled_model_ = core_.compile_model(
+      model, device_, ov::hint::performance_mode(ov::hint::PerformanceMode::LATENCY));
+  }
 }
 
 std::list<Armor> YOLOV5::detect(const cv::Mat & raw_img, int frame_count)
