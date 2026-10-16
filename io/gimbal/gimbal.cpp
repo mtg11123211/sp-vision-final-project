@@ -101,7 +101,9 @@ void Gimbal::send(bool control, bool fire, float yaw, float pitch, uint8_t targe
   tx_data_.yaw = yaw;
   tx_data_.yaw_vel = 0.0f;  //保持0即可
   tx_data_.yaw_acc = 0.0f;  //保持0即可
-  tx_data_.pitch = pitch;
+  // 现场实测：这台车电控的 pitch 正方向与本框架世界系相反（板子上移、云台下移），
+  // 所以在发给电控之前取反。yaw 方向不变。
+  tx_data_.pitch = -pitch;
   tx_data_.pitch_vel = 0.0f;  //保持0即可
   tx_data_.pitch_acc = 0.0f;  //保持0即可
   tx_data_.target = target;   // 目标编号，默认 8（无目标）
