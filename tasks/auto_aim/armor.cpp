@@ -2,10 +2,35 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <opencv2/opencv.hpp>
+#include <string>
 
 namespace auto_aim
 {
+namespace
+{
+// 模型的颜色头有 4 个类（yolov5.cpp 里 colRange(9, 13)），只需要把编号翻成 Color。
+//
+// 官方训练工程把 0 当蓝、1 当红，所以老代码写的是 0->blue / 1->red。
+// 但这台车上的模型实测是 0=红、1=蓝：现场按 enemy_color: "red" 跑的时候，
+// 日志反复打「视野里没有 red 色的装甲板，退回不筛颜色」，而靶机就是红的，
+// 说明红板的 color_id 落在了 0 —— 整条链红蓝反了一次。
+// 默认按实测顺序映射；万一以后换了模型，DSH_COLOR_ORDER=blue 一条命令就能退回旧映射。
+const bool color_zero_is_blue = []() {
+  const char * order = std::getenv("DSH_COLOR_ORDER");
+  return order != nullptr && std::string(order) == "blue";
+}();
+
+Color to_color(int color_id)
+{
+  if (color_id == 0) return color_zero_is_blue ? blue : red;
+  if (color_id == 1) return color_zero_is_blue ? red : blue;
+  if (color_id == 3) return purple;  // 紫色基地
+  return extinguish;                 // 2 = 灭灯；越界也当灭灯，反正红蓝都不会匹配
+}
+}  // namespace
+
 Lightbar::Lightbar(const cv::RotatedRect & rotated_rect, std::size_t id)
 : id(id), rotated_rect(rotated_rect)
 {
@@ -172,7 +197,7 @@ Armor::Armor(
   rectangular_error = std::max(left_rectangular_error, right_rectangular_error);
 
   ratio = max_length / max_width;
-  color = color_id == 0 ? Color::blue : color_id == 1 ? Color::red : Color::extinguish;
+  color = to_color(color_id);
   name = num_id == 0  ? ArmorName::sentry
          : num_id > 5 ? ArmorName(num_id)
                       : ArmorName(num_id - 1);  //TODO 考虑Bb
@@ -213,7 +238,7 @@ Armor::Armor(
   rectangular_error = std::max(left_rectangular_error, right_rectangular_error);
 
   ratio = max_length / max_width;
-  color = color_id == 0 ? Color::blue : color_id == 1 ? Color::red : Color::extinguish;
+  color = to_color(color_id);
   name = num_id == 0 ? ArmorName::sentry : num_id > 5 ? ArmorName(num_id) : ArmorName(num_id - 1);
   type = num_id == 1 ? ArmorType::big : ArmorType::small;
 }
