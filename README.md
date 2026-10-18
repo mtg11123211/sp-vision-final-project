@@ -1,6 +1,6 @@
 # task_1 提交说明
 
-- 基线：`c37d941`，分支 `submit/task_1`
+- 基线：`v0.3`（`fix(gimbal): 发送前对 pitch 取反`），分支 `submit/task_1`
 - 范围：`src/task_1.cpp`，共用 `io/`、`tasks/auto_aim/`、`tools/`
 - `configs/standard.yaml` 为仓库默认值
 - tag：`task1-1017` 是 10-17 的快照，`task1-1018` 含颜色映射修正（第 10 节）
@@ -104,26 +104,31 @@ DSH_REPLAY_DIR=<录包目录> ./build/task_1 configs/standard.yaml
 
 ## 9. 提交日志
 
-| 提交 | 日期 | 说明 |
-|---|---|---|
-| `d15ccdd` | 10-13 | baseline：官方分支 + 已完成的 task_2/task_3/target.cpp |
-| `1a69fcf` | 10-13 | chore：更新 .gitignore |
-| `2f7f8d9` | 10-13 | fix(ekf)：卡方阈值 1.5 改为 9.488 / 19.68 |
-| `e2ddb97` | 10-13 | fix(armor)：priority 补默认初值 |
-| `d8a8445` | 10-13 | fix(gimbal)：send 增加目标编号；q(t) 防除零 |
-| `104ef66` | 10-13 | feat(target)：过程噪声分组、几何冻结、发散判据、NIS 拒收 |
-| `a4b6dfc` | 10-13 | config：任务二/三参数 |
-| `acfd1f9` | 10-13 | feat(task2)：弹道解算、丢帧保持、5Hz 节流、10 发上限 |
-| `31536dc` | 10-13 | feat(task3)：前哨站建模与顶部板过滤 |
-| `32da667` | 10-13 | feat(replay)：录包器、回放数据集、假相机 |
-| `c6d9a0b` | 10-13 | feat(io)：录包钩子与回放模式 |
-| `30bfe6a` | 10-13 | build+config：CMake 与配置开关 |
-| `f1b9aa5` | 10-14 | fix(yolo)：GPU 不可用退回 CPU |
-| `c37d941` | 10-17 | fix(gimbal)：pitch 取反（本分支基线） |
-| `2b867c0` | 10-18 | fix(armor)：颜色映射改为 0 红 1 蓝（第 10 节） |
+| 日期 | 说明 |
+|---|---|
+| 10-13 | baseline：课程仓库 final_project_aim 分支 + 本人已完成的 task_2 / task_3 / target.cpp |
+| 10-13 | chore：.gitignore 忽略自用文档 |
+| 10-13 | fix(ekf)：卡方阈值按自由度取值 9.488 / 19.68 |
+| 10-13 | fix(armor)：priority 补默认初值 |
+| 10-13 | fix(gimbal)：send 带目标编号，q(t) 避免除零 |
+| 10-13 | feat(target)：过程噪声分组、前哨站几何冻结、NIS 拒收 |
+| 10-13 | config：补任务二、任务三参数 |
+| 10-13 | feat(task2)：弹道解算、丢帧保持、发弹节流 |
+| 10-13 | feat(task3)：前哨站三块中部板建模与顶部板过滤 |
+| 10-13 | feat(replay)：录包器、回放数据集、假相机 |
+| 10-13 | feat(io)：相机与云台接录包钩子与回放模式 |
+| 10-13 | build：录包回放源文件接入 CMake |
+| 10-14 | fix(yolo)：OpenVINO 设备不可用时回退 CPU |
+| 10-16 | fix(gimbal)：发送前对 pitch 取反 |
+| 10-17 | docs：补 task_1 提交说明 |
+| 10-17 | docs：本分支 README 改为 task_1 提交说明 |
+| 10-18 | docs：提交说明精简为用法与参数 |
+| 10-18 | docs：提交说明改为条目式 |
+| 10-18 | fix(armor)：颜色映射按实车模型改为 0 红 1 蓝（第 10 节） |
+| 10-18 | docs：补充颜色映射修正说明并校正行号 |
 
 ## 10. 已知问题
 
-颜色类别映射（已修正，`2b867c0`）。`tasks/auto_aim/armor.cpp` 原先把模型第 0 类映射成蓝、第 1 类映射成红，而实车模型是 0 红 1 蓝。受影响的是 task_2 / task_3 的颜色过滤：`enemy_color: "red"` 永远匹配不上，`src/task_2.cpp:173` 会打印「视野里没有 red 色的装甲板，退回不筛颜色」，等于不过滤，可能锁到友方装甲板。task_1 不读 `enemy_color`，它自身的行为不受这条影响。
+颜色类别映射（已修正，第 9 节最后两条）。`tasks/auto_aim/armor.cpp` 原先把模型第 0 类映射成蓝、第 1 类映射成红，而实车模型是 0 红 1 蓝。受影响的是 task_2 / task_3 的颜色过滤：`enemy_color: "red"` 永远匹配不上，`src/task_2.cpp:173` 会打印「视野里没有 red 色的装甲板，退回不筛颜色」，等于不过滤，可能锁到友方装甲板。task_1 不读 `enemy_color`，它自身的行为不受这条影响。
 
 现在统一走 `to_color()`：0 红、1 蓝、3 紫，其余灭灯；换模型时用 `DSH_COLOR_ORDER=blue` 退回旧映射。
