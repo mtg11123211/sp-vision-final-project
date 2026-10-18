@@ -1,8 +1,9 @@
 # task_1 提交说明
 
-- 基线：`c37d941`，分支 `submit/task_1`，tag `task1-1017`
+- 基线：`c37d941`，分支 `submit/task_1`
 - 范围：`src/task_1.cpp`，共用 `io/`、`tasks/auto_aim/`、`tools/`
 - `configs/standard.yaml` 为仓库默认值
+- tag：`task1-1017` 是 10-17 的快照，`task1-1018` 含颜色映射修正（第 10 节）
 
 ## 1. 功能
 
@@ -25,7 +26,7 @@ mkdir -p build && cd build
 cmake .. && make -j2 task_1
 ```
 
-产物 `build/task_1`。`CMakeLists.txt:14` 的 `OpenVINO_DIR` 为写死路径，本机不同则改该行或 `cmake -DOpenVINO_DIR=<路径> ..`。
+产物 `build/task_1`。`CMakeLists.txt:15` 的 `OpenVINO_DIR` 为写死路径，本机不同则改该行或 `cmake -DOpenVINO_DIR=<路径> ..`。
 
 ## 3. 运行
 
@@ -82,7 +83,7 @@ DSH_REPLAY_DIR=<录包目录> ./build/task_1 configs/standard.yaml
 
 | 行 | 键 | 值 | 作用 |
 |---|---|---|---|
-| 1 | `enemy_color` | `"red"` | 目标颜色 |
+| 1 | `enemy_color` | `"red"` | 目标颜色。task_1 不读；task_2/task_3 用它与 `armor.color` 比较（第 10 节） |
 | 7 | `yolov5_model_path` | `assets/yolov5.xml` | 相对路径 |
 | 8 | `device` | `GPU` | 无可用 GPU 时 `export DSH_DEVICE=CPU` |
 | 9 | `min_confidence` | `0.8` | 检测阈值 |
@@ -91,7 +92,7 @@ DSH_REPLAY_DIR=<录包目录> ./build/task_1 configs/standard.yaml
 | 33 | `camera_matrix` | fx 1809.234 / fy 1813.010 / cx 704.312 / cy 551.847 | 绑定 1408x1104 |
 | 34 | `distort_coeffs` | `[-0.0772, 0.1504, 0.00157, 0.00104, 0]` | 畸变系数 |
 | 43 | `com_port` | `"/dev/gimbal"` | 云台串口 |
-| 45 | `baudrate` | `921600` | 波特率 |
+| — | `baudrate` | 代码默认 921600 | 波特率，yaml 里没写，读不到就用默认（`io/gimbal/gimbal.cpp:39`） |
 | 51 | `target_hold_ms` | `300` | 丢目标保持时间 |
 
 ## 8. 验收判据
@@ -119,3 +120,10 @@ DSH_REPLAY_DIR=<录包目录> ./build/task_1 configs/standard.yaml
 | `30bfe6a` | 10-13 | build+config：CMake 与配置开关 |
 | `f1b9aa5` | 10-14 | fix(yolo)：GPU 不可用退回 CPU |
 | `c37d941` | 10-17 | fix(gimbal)：pitch 取反（本分支基线） |
+| `2b867c0` | 10-18 | fix(armor)：颜色映射改为 0 红 1 蓝（第 10 节） |
+
+## 10. 已知问题
+
+颜色类别映射（已修正，`2b867c0`）。`tasks/auto_aim/armor.cpp` 原先把模型第 0 类映射成蓝、第 1 类映射成红，而实车模型是 0 红 1 蓝。受影响的是 task_2 / task_3 的颜色过滤：`enemy_color: "red"` 永远匹配不上，`src/task_2.cpp:173` 会打印「视野里没有 red 色的装甲板，退回不筛颜色」，等于不过滤，可能锁到友方装甲板。task_1 不读 `enemy_color`，它自身的行为不受这条影响。
+
+现在统一走 `to_color()`：0 红、1 蓝、3 紫，其余灭灯；换模型时用 `DSH_COLOR_ORDER=blue` 退回旧映射。
