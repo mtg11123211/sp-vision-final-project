@@ -1,131 +1,121 @@
-# task_1 基础自瞄 —— 提交说明
+# task_1 提交说明
 
-- 提交基线：`c37d941`（本分支 `submit/task_1` / tag `task1-1017`）
-- 代码范围：`src/task_1.cpp`，共用 `io/` `tasks/auto_aim/` `tools/`
-- 本版 `configs/standard.yaml` 为仓库默认值
+- 基线：`c37d941`，分支 `submit/task_1`，tag `task1-1017`
+- 范围：`src/task_1.cpp`，共用 `io/`、`tasks/auto_aim/`、`tools/`
+- `configs/standard.yaml` 为仓库默认值
 
----
-
-## 1. 这个程序做什么
-
-一帧一条链路：
+## 1. 功能
 
 ```
-相机取帧(1408×1104) → YOLOv5(OpenVINO) 检测装甲板 → PnP + 坐标变换求出装甲板的世界坐标
-→ 转成 yaw / pitch / 距离 → 通过串口(921600, 30 字节协议)发给云台
-→ 同时窗口左上角打印 yaw/pitch/dist，Plotter 推曲线，按 q 退出
+相机取帧 1408x1104 → YOLOv5(OpenVINO) 检测装甲板 → PnP + 坐标变换得世界坐标
+→ yaw / pitch / 距离 → 串口 921600、30 字节协议发云台
+→ 窗口左上角打印角度，Plotter 输出曲线，q 键退出
 ```
 
-细节：
+- 只对准装甲板中心，无提前量（提前量在 task_2）
+- 丢目标后 300 ms 内保持上一次角度（`target_hold_ms`），超时停止发控制
+- 退出前发一帧不控制，云台交还电控
 
-- 只对准装甲板中心，不算提前量（那是 task_2 的事）
-- 丢目标后 300 ms 内保持上一次角度（`target_hold_ms`），超过就不发控制
-- 退出时主动发一帧「不控制」，把云台交还电控
+## 2. 编译
 
----
-
-## 2. 怎么编
-
-依赖（缺一个都过不了 `cmake`）：OpenCV、Eigen3、fmt、spdlog、yaml-cpp、nlohmann_json、OpenVINO 2024.6、海康 MVS SDK（`io/hikrobot/lib/amd64/libMvCameraControl.so` 已随仓库带）。
+依赖：OpenCV、Eigen3、fmt、spdlog、yaml-cpp、nlohmann_json、OpenVINO 2024.6、海康 MVS SDK（`io/hikrobot/lib/amd64/libMvCameraControl.so` 随仓库带）。
 
 ```bash
-cd final_project_aim
 mkdir -p build && cd build
 cmake .. && make -j2 task_1
 ```
 
-产物：`build/task_1`
+产物 `build/task_1`。`CMakeLists.txt:14` 的 `OpenVINO_DIR` 为写死路径，本机不同则改该行或 `cmake -DOpenVINO_DIR=<路径> ..`。
 
-注意：`CMakeLists.txt:14` 把 `OpenVINO_DIR` 写死成 `/opt/intel/openvino_2024.6.0/runtime/cmake/`。本机路径不一样就改这一行，或者 `cmake -DOpenVINO_DIR=<你的路径> ..`。
-
----
-
-## 3. 怎么跑
+## 3. 运行
 
 ```bash
-cd final_project_aim                                    # 必须在工程根！
 ./build/task_1 configs/standard.yaml
 ```
 
-注意：`configs/standard.yaml:7` 的 `yolov5_model_path: assets/yolov5.xml` 是相对路径，在别的目录启动会报 `Could not open the file: "assets/yolov5.xml"`。
-
-带录包跑（每帧存 jpg + `frames.csv`）：
+`configs/standard.yaml:7` 模型路径为相对路径，须在工程根启动。
 
 ```bash
-DSH_RECORD_DIR=~/recordings/任务一_$(date +%m%d_%H%M) ./build/task_1 configs/standard.yaml
-```
-
----
-
-## 4. 硬件
-
-| 项 | 值 | 说明 |
-|---|---|---|
-| 相机 | HikRobot USB，`vid_pid: 2bdf:0001` | yaml 第 25 行 |
-| 云台串口 | `/dev/gimbal`，921600 | 需要 udev 规则；没有云台时程序会打印 `Failed to open serial` 但检测照跑 |
-| 分辨率 | 1408×1104 | 与 `camera_matrix` 的主点 `704.312 / 551.847` 对应 |
-
-没有硬件也能跑通前半段（`io/camera.cpp` 支持回放）：
-
-```bash
+# 录包
+DSH_RECORD_DIR=~/recordings/task1_$(date +%m%d_%H%M) ./build/task_1 configs/standard.yaml
+# 离线回放（无硬件）
 DSH_REPLAY_DIR=<录包目录> ./build/task_1 configs/standard.yaml
 ```
 
-录包目录需要 `frames.csv` + `%06d.jpg`（1408×1104）。仓库里不含录制数据（`.gitignore` 排除了 `recordings/`）。
+录包目录格式：`frames.csv` + `%06d.jpg`（1408x1104）。仓库不含录制数据。
 
----
+## 4. 硬件
+
+| 项 | 值 |
+|---|---|
+| 相机 | HikRobot USB，`vid_pid: 2bdf:0001`（yaml 第 25 行） |
+| 云台串口 | `/dev/gimbal`，921600，需 udev 规则；无云台时打印 `Failed to open serial`，检测不受影响 |
+| 分辨率 | 1408x1104，对应 `camera_matrix` 主点 704.312 / 551.847 |
 
 ## 5. 代码导览
 
 | 位置 | 内容 |
 |---|---|
 | `src/task_1.cpp:32` | `tools::Plotter plotter;` |
-| `src/task_1.cpp:62` | `q = gimbal.q(t);` 取云台姿态（判空后） |
+| `src/task_1.cpp:62` | `q = gimbal.q(t);` 取云台姿态 |
 | `src/task_1.cpp:81-82` | `last_yaw/last_pitch = armor.ypd_in_world[0]/[1]` |
-| `src/task_1.cpp:87` | `gimbal.send(true, false, last_yaw, last_pitch);`，控制发出的唯一入口 |
-| `src/task_1.cpp:90-95` | 左上角黄字 `yaw … pitch … dist … m` |
-| `src/task_1.cpp:98-103` | Plotter 组 `aim`（yaw/pitch/distance） |
-| `src/task_1.cpp:106` | `cv::imshow("task1", img)`，`:115` 退出前 `send(false,false,0,0)` |
-| `io/camera.cpp` | 相机/回放二选一（读 `DSH_RECORD_DIR` / `DSH_REPLAY_DIR`） |
-| `tasks/auto_aim/yolos/yolov5.cpp` | 前处理 + OpenVINO 推理 + 后处理；`:247` 左上角帧计数，`:261` `detection` 窗口 |
+| `src/task_1.cpp:87` | `gimbal.send(true, false, last_yaw, last_pitch);` 控制发出入口 |
+| `src/task_1.cpp:90-95` | 左上角黄字 yaw / pitch / dist |
+| `src/task_1.cpp:98-103` | Plotter 组 `aim` |
+| `src/task_1.cpp:106` | `cv::imshow("task1", img)`；`:115` 退出前 `send(false,false,0,0)` |
+| `io/camera.cpp` | 相机/回放分支，读 `DSH_RECORD_DIR` / `DSH_REPLAY_DIR` |
+| `tasks/auto_aim/yolos/yolov5.cpp` | 前处理、推理、后处理；`:247` 帧计数，`:261` `detection` 窗口 |
 | `tasks/auto_aim/solver.cpp:84/88/99` | 相机系 → 云台系 → 世界系 → `ypd` |
-| `tools/math_tools.cpp:103-110` | `xyz2ypd`：`yaw=atan2(y,x)`、`pitch=atan2(z,√(x²+y²))` |
+| `tools/math_tools.cpp:103-110` | `xyz2ypd`：`yaw=atan2(y,x)`，`pitch=atan2(z, sqrt(x*x+y*y))` |
 | `io/gimbal/gimbal.hpp:40-54` | 下行 30 字节 `VisionToGimbal` 结构 |
-| `io/gimbal/gimbal.cpp:100-108` | 写 `mode` + yaw/pitch 六个量 |
-| `io/gimbal/gimbal.cpp:236-252` | 收包、找 `'S','P'`、CRC16 校验 |
+| `io/gimbal/gimbal.cpp:100-108` | 写 mode 与 yaw/pitch 六个量 |
+| `io/gimbal/gimbal.cpp:236-252` | 收包、包头 `SP` 定位、CRC16 校验 |
 
-坐标系约定：世界系 z 朝上，`pitch` 为正表示目标在水平线上方。
-
----
+坐标系：世界系 z 朝上，pitch 为正表示目标在水平线上方。
 
 ## 6. 实测结果
 
-- 分辨率 1408×1104；终端 `[Recorder] 实际录制帧率` 从 37 fps 爬到 49 fps（稳定 ≈48 fps，无严重掉帧）
-- 检测框稳定，云台能跟随装甲板；窗口中左上角白字 `[N]` 是帧计数，不是错误码
+- 录包帧率 37 fps 爬升至 49 fps，稳定约 48 fps，无严重掉帧
+- 检测框稳定，云台跟随装甲板；窗口左上角白字 `[N]` 为帧计数
 
----
-
-## 7. task_1 用到的参数（`configs/standard.yaml`）
+## 7. 参数（`configs/standard.yaml`）
 
 | 行 | 键 | 值 | 作用 |
 |---|---|---|---|
 | 1 | `enemy_color` | `"red"` | 目标颜色 |
-| 7 | `yolov5_model_path` | `assets/yolov5.xml` | 相对路径，必须在工程根启动 |
+| 7 | `yolov5_model_path` | `assets/yolov5.xml` | 相对路径 |
 | 8 | `device` | `GPU` | 无可用 GPU 时 `export DSH_DEVICE=CPU` |
 | 9 | `min_confidence` | `0.8` | 检测阈值 |
 | 11 | `nms_threshold` | — | NMS |
 | 25 | `vid_pid` | `2bdf:0001` | 相机 VID:PID |
-| 33 | `camera_matrix` | fx 1809.234 / fy 1813.010 / cx 704.312 / cy 551.847 | 与 1408×1104 绑定 |
-| 34 | `distort_coeffs` | `[-0.0772, 0.1504, 0.00157, 0.00104, 0]` | 畸变，边缘误差大 |
+| 33 | `camera_matrix` | fx 1809.234 / fy 1813.010 / cx 704.312 / cy 551.847 | 绑定 1408x1104 |
+| 34 | `distort_coeffs` | `[-0.0772, 0.1504, 0.00157, 0.00104, 0]` | 畸变系数 |
 | 43 | `com_port` | `"/dev/gimbal"` | 云台串口 |
-| 45 | `baudrate` | `921600` | |
-| 51 | `target_hold_ms` | `300` | 丢目标后保持时间 |
+| 45 | `baudrate` | `921600` | 波特率 |
+| 51 | `target_hold_ms` | `300` | 丢目标保持时间 |
 
----
+## 8. 验收判据
 
-## 8. 怎么判断"跑对了"
+1. 日志出现 `[Gimbal] Serial opened at 921600 baudrate.` 与 `[Gimbal] First q received.`
+2. `detection` 窗口有实时画面与绿框
+3. `task1` 窗口黄字随装甲板变化：yaw 连续、pitch 随高度变化、dist 随距离变化
+4. 开启 `DSH_RECORD_DIR` 时终端每 5 秒打印一次录制帧率
 
-1. 启动日志出现 `[Gimbal] Serial opened at 921600 baudrate.` 和 `[Gimbal] First q received.`（没有云台时只有前者失败提示）
-2. `detection` 窗口能看到实时画面 + 绿框
-3. `task1` 窗口左上角黄字随装甲板移动而变化（`yaw` 连续、`pitch` 随高度变化、`dist` 随距离变化）
-4. 终端每 5 秒打印一次录制帧率（开了 `DSH_RECORD_DIR` 时）
+## 9. 提交日志
+
+| 提交 | 日期 | 说明 |
+|---|---|---|
+| `d15ccdd` | 10-13 | baseline：官方分支 + 已完成的 task_2/task_3/target.cpp |
+| `1a69fcf` | 10-13 | chore：更新 .gitignore |
+| `2f7f8d9` | 10-13 | fix(ekf)：卡方阈值 1.5 改为 9.488 / 19.68 |
+| `e2ddb97` | 10-13 | fix(armor)：priority 补默认初值 |
+| `d8a8445` | 10-13 | fix(gimbal)：send 增加目标编号；q(t) 防除零 |
+| `104ef66` | 10-13 | feat(target)：过程噪声分组、几何冻结、发散判据、NIS 拒收 |
+| `a4b6dfc` | 10-13 | config：任务二/三参数 |
+| `acfd1f9` | 10-13 | feat(task2)：弹道解算、丢帧保持、5Hz 节流、10 发上限 |
+| `31536dc` | 10-13 | feat(task3)：前哨站建模与顶部板过滤 |
+| `32da667` | 10-13 | feat(replay)：录包器、回放数据集、假相机 |
+| `c6d9a0b` | 10-13 | feat(io)：录包钩子与回放模式 |
+| `30bfe6a` | 10-13 | build+config：CMake 与配置开关 |
+| `f1b9aa5` | 10-14 | fix(yolo)：GPU 不可用退回 CPU |
+| `c37d941` | 10-17 | fix(gimbal)：pitch 取反（本分支基线） |
