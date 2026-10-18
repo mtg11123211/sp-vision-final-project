@@ -1,20 +1,5 @@
-# sp_vision_tutorial_27 
-同济大学SuperPower战队2027赛季算法组招新仓库
+# offline_replay
 
-Lecture 1:Hello SP Vision  
-Lecture 2:Hello C++&&OOP  
-Lecture 3:Hello Modern C++  
-Lecture4:  
-自瞄：Hello Armor&&PnP
-导航雷达：Hello ROS2  
-Lecture5:   
-自瞄：Hello Kalman&&Target
-导航雷达：Hello SP Nav
+离线录包回放工具的历史线：把跑车时看到的「图像 + 曝光时刻 + 云台四元数」录下来，下车后用录包离线回放调算法。
 
-
-后续课程视频将会全部上传至战队Bilibili官方账号：[TJ-SuperPower战队](https://space.bilibili.com/651837546)
-
------------
-##### 注意：本仓库main分支为算法组自瞄方向招新使用，nav分支为算法组导航方向招新使用，请各位同学在进行作业提交等操作时注意区分
-
-##### 关于大作业代码：final_project_aim分支为自瞄方向大作业 
+工具代码（`tools/recorder`、`tools/replay`、`io/video`）已并入 `main`，本分支保留作快照，后续开发在 `main` 上进行。
