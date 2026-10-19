@@ -131,4 +131,4 @@ DSH_REPLAY_DIR=<录包目录> ./build/task_1 configs/standard.yaml
 
 颜色类别映射（已修正，第 9 节最后两条）。`tasks/auto_aim/armor.cpp` 原先把模型第 0 类映射成蓝、第 1 类映射成红，而实车模型是 0 红 1 蓝。受影响的是 task_2 / task_3 的颜色过滤：`enemy_color: "red"` 永远匹配不上，`src/task_2.cpp:173` 会打印「视野里没有 red 色的装甲板，退回不筛颜色」，等于不过滤，可能锁到友方装甲板。task_1 不读 `enemy_color`，它自身的行为不受这条影响。
 
-现在统一走 `to_color()`：0 红、1 蓝、3 紫，其余灭灯；换模型时用 `DSH_COLOR_ORDER=blue` 退回旧映射。
+现在统一走 `to_color()`：0 红、1 蓝、3 紫，其余灭灯。
