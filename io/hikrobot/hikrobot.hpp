@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <opencv2/opencv.hpp>
 #include <string>
 #include <thread>
@@ -27,11 +28,16 @@ public:
     std::chrono::milliseconds timeout) override;
   bool is_alive() const override;
 
+  // 最近一帧的曝光时间戳（nDevTimeStampHigh/Low 拼成的 64 位 tick），0 表示这台相机没给。
+  // 只用来测量延迟，控制回路完全不读它。
+  uint64_t dev_ts() const { return dev_ts_.load(); }
+
 private:
   struct CameraData
   {
     cv::Mat img;
     std::chrono::steady_clock::time_point timestamp;
+    uint64_t dev_ts = 0;
   };
 
   double exposure_us_;
@@ -46,6 +52,7 @@ private:
   std::thread capture_thread_;
   std::atomic<bool> capturing_;
   std::atomic<bool> capture_quit_;
+  std::atomic<uint64_t> dev_ts_{0};
   tools::ThreadSafeQueue<CameraData> queue_;
 
   int vid_, pid_;

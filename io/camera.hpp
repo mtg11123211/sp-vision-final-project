@@ -2,6 +2,7 @@
 #define IO__CAMERA_HPP
 
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <opencv2/opencv.hpp>
 #include <string>
@@ -17,6 +18,10 @@ public:
     cv::Mat & img, std::chrono::steady_clock::time_point & timestamp,
     std::chrono::milliseconds timeout) = 0;
   virtual bool is_alive() const = 0;
+
+  // 最近一帧的曝光时间戳（相机自己的 tick）。只有海康那路有，其余相机恒为 0。
+  // 纯测量用，控制回路不看。
+  virtual uint64_t dev_ts() const { return 0; }
 };
 
 class Camera
@@ -28,6 +33,7 @@ public:
     cv::Mat & img, std::chrono::steady_clock::time_point & timestamp,
     std::chrono::milliseconds timeout);
   bool is_alive() const;
+  uint64_t dev_ts() const;
 
 private:
   std::unique_ptr<CameraBase> camera_;

@@ -10,6 +10,7 @@
 #include "tools/recorder.hpp"
 #include "tools/replay.hpp"
 #include "tools/yaml.hpp"
+#include <cstdlib>
 
 namespace io
 {
@@ -97,7 +98,11 @@ void Gimbal::send(bool control, bool fire, float yaw, float pitch, uint8_t targe
   std::lock_guard<std::mutex> lock(serial_mutex_);
   if (!is_connected_ || !serial_.isOpen()) return;
 
-  tx_data_.mode = control ? (fire ? 2 : 1) : 0;
+  // 开火时发的 mode 值，可用环境变量覆盖：DSH_FIRE_MODE=3
+  static const int fire_mode = []() { const char * v = std::getenv("DSH_FIRE_MODE"); return v ? std::atoi(v) : 2; }();
+  static const bool fire_mode_logged = (tools::logger()->info("[Gimbal] fire_mode = {}", fire_mode), true);
+  (void)fire_mode_logged;
+  tx_data_.mode = control ? (fire ? fire_mode : 1) : 0;
   tx_data_.yaw = yaw;
   tx_data_.yaw_vel = 0.0f;  //保持0即可
   tx_data_.yaw_acc = 0.0f;  //保持0即可

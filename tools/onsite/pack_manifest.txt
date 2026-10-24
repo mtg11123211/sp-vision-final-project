@@ -1,0 +1,51 @@
+# fp_aim 副本补丁包 —— 文件清单（唯一来源）
+#
+# 用法：
+#   笔记本：powershell -ExecutionPolicy Bypass -File tools\onsite\make_pack.ps1
+#     ⇒ 生成 D:\DSH\fp_aim_patch_MMDD_HHMM.tar.gz（含 sha256 清单 + 车机安装脚本）
+#   拷贝：scp D:\DSH\fp_aim_patch_*.tar.gz rm@192.168.1.50:~/        （或 U 盘）
+#   车机：cd ~/fp_aim && tar -xzf ~/fp_aim_patch_*.tar.gz && bash tools/onsite/pack/install.sh
+#
+# 格式：<相对工程根的路径>    <为什么需要它>
+# 空行与 # 开头的行会被忽略。**车机若不是 HEAD，io/gimbal/gimbal.hpp 也要一起传**
+# （send() 的第 5 个参数 target 在它里面）。
+
+# ── 作业主体（副本版，与原工程同名不同内容）────────────────────────
+src/task_2.cpp            副本版：四道开火闸 + 到位门控 + 低位靶三态 + 人工门 + 到达时刻选板 + 汇总器
+src/task_3.cpp             副本版：人工门 + DSH_LEAD 总提前量（原来 task_3 完全没有链路滞后补偿）
+src/task_common.hpp        calc_aim 的 t_extra（出弹延时；方案①下 task_2/task_3 都传 0）
+
+# ── 副本新增的头文件（不传直接编不过）────────────────────────────
+src/fire_key.hpp           新增：F 键门（四级取键后端 evdev/Windows/终端/窗口）
+src/low_plate.hpp          新增：低位靶三态 + 信任状态机（active 迟滞 + 重建作废）
+src/env_util.hpp           新增：环境变量读取小工具（env_bool / env_double）
+src/test_summary.hpp       新增：测试汇总器（退出时统一输出 A/B/C 三组 + 启动日志原样）
+src/overlay.hpp            HUD 叠加层
+src/detect_log.hpp         检测日志（离线调 EKF）
+src/latency_probe.hpp      延迟探针（CSV：grab/infer/send/cmd_yaw/fb_yaw）
+
+# ── 框架改动（相对官方初始代码，我们改过的）──────────────────────
+tasks/auto_aim/armor.cpp   颜色映射 0 红 1 蓝（实车模型与训练时相反）
+tasks/auto_aim/target.cpp  NIS 拒收回滚 + 前哨站阶梯分层 + 官方 10-19 修复
+io/camera.cpp              设备时间戳 + 录像钩子
+io/camera.hpp              dev_ts() 声明
+io/gimbal/gimbal.cpp       pitch 取反一致性 + DSH_FIRE_MODE
+io/hikrobot/hikrobot.cpp   取帧时间戳
+io/hikrobot/hikrobot.hpp   dev_ts 透出
+tools/extended_kalman_filter.cpp  NIS/NEES 阈值 9.488/19.68（官方 1.5 是错的）
+tools/extended_kalman_filter.hpp  同上（阈值声明 + recent_nis_failures 窗口）
+
+# ── 配置 ───────────────────────────────────────────────
+configs/standard.yaml      0.2 s 间隔、offset 0.0、record_dir ""、task2/task3 段
+configs/submit.yaml        提交版：与 standard.yaml 只差 task2 的 max_rounds_per_stage: 10（其余逐字相同）
+
+# ── 构建 ───────────────────────────────────────────────
+CMakeLists.txt             加 keytest 目标（改了它要重新 cmake）
+
+# ── 工具与脚本（车机上手测、笔记本上做分析）──────────────────────
+tools/keytest.cpp          按键通道自测（零工程依赖，./build/keytest）
+tools/parse_session.py     日志判读（笔记本）
+tools/lead_solve.py        斜率法定标（笔记本）
+tools/make_record.py       记录表生成（笔记本）
+tools/onsite/run_measure.sh   车机一条龙：preflight/lat/static/spin/sign/slope/report/pull/link
+tools/onsite/pack/install.sh 车机安装+校验+编译+验收（打进包里）

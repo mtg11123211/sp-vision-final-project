@@ -310,6 +310,19 @@ bool Target::update_checked(const Armor & armor, double nis_reject_threshold)
   if (ekf_.last_nis > nis_reject_threshold) {
     ekf_.x = x_before;
     ekf_.P = P_before;
+    // 这一帧的失败标记已经进了 EKF 内部「最近 NIS 失败率」的滑动窗口，但观测被拒收、
+    // 状态也已回滚，它不该继续算在失败率里。否则连续几帧拒收就会把失败率顶到 1.0，
+    // 而这个窗口长 100 帧（58 帧每秒约 1.7 秒），stable 会一直为假 —— 现场表现是
+    // 「有目标、云台也跟得住，但就是不请求开火」。这里把刚压进去的那个 1 退掉。
+    auto & recent = ekf_.recent_nis_failures;
+    if (!recent.empty()) {
+      recent.pop_back();
+      int failures = 0;
+      for (int flag : recent) failures += flag;
+      ekf_.data["recent_nis_failures"] =
+        recent.empty() ? 0.0 : static_cast<double>(failures) / static_cast<double>(recent.size());
+      ekf_.data["nis_fail"] = 0.0;
+    }
     // 关联结果 last_id 保留：这一帧看到的确实是最接近那块板，只是位置不可信，
     // 下一帧继续按同一块板去预测即可。
     tools::logger()->debug("[Target] NIS {:.2f} over threshold, measurement rejected", ekf_.last_nis);

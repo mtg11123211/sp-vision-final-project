@@ -92,6 +92,7 @@ void HikRobot::read(cv::Mat & img, std::chrono::steady_clock::time_point & times
   rotate(data.img, img);
 
   timestamp = data.timestamp;
+  dev_ts_ = data.dev_ts;
 }
 
 bool HikRobot::try_read_for(
@@ -104,6 +105,7 @@ bool HikRobot::try_read_for(
   }
   rotate(data.img, img);
   timestamp = data.timestamp;
+  dev_ts_ = data.dev_ts;
   return true;
 }
 
@@ -232,7 +234,13 @@ void HikRobot::capture_start()
       cv::cvtColor(img, dst_image, type_map.at(pixel_type));
       img = dst_image;
 
-      queue_.push({img, timestamp});
+      // 相机自己给的曝光时间戳：高 32 位在前、低 32 位在后，拼成一个 64 位 tick。
+      // 只喂给测量探针，控制回路不读。老型号可能一直是 0，那就等于没有。
+      const uint64_t dev_ts =
+        (static_cast<uint64_t>(raw.stFrameInfo.nDevTimeStampHigh) << 32) |
+        static_cast<uint64_t>(raw.stFrameInfo.nDevTimeStampLow);
+
+      queue_.push({img, timestamp, dev_ts});
 
       ret = MV_CC_FreeImageBuffer(handle_, &raw);
       if (ret != MV_OK) {

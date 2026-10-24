@@ -78,4 +78,6 @@ bool Camera::try_read_for(
 
 bool Camera::is_alive() const { return camera_->is_alive(); }
 
+uint64_t Camera::dev_ts() const { return camera_->dev_ts(); }
+
 }  // namespace io

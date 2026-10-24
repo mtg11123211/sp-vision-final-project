@@ -1,5 +1,11 @@
-# enemy_color: "red"
-enemy_color: "blue"
+# enemy_color: "blue"   # 10-23 现场确认：靶子是红方，先前的 blue 是照抄步兵配置，
+#                      # 颜色一错，检测会先按 blue 筛、筛不到才退回不筛，等于白丢一半帧。
+enemy_color: "red"
+# rotation_angle：只旋转图像（io/hikrobot/hikrobot.cpp:392-404），不旋转 yaml 里的相机内参。
+# 哨兵这台相机是倒装的 ⇒ 必须 180，否则画面上下颠倒（10-23 实测：写 0 = 倒，写 180 = 正）。
+# 注意：先前那轮"写 180 还是倒"是假象——当时 run_measure.sh 还写死 configs/standard.yaml（rotation 0），
+# 进程加载的从来不是这份文件。改了配置先确认跑的是哪份：日志开头的「配置：」行。
+# camera_matrix 与这个 180 是配套的（标定在旋转后的正立画面上做），不要单独改角度或单独改主点。
 rotation_angle: 180
 
 #####-----神经网络参数-----#####
@@ -17,8 +23,14 @@ roi:
 
 threshold: 100
 
-yaw_offset: 2 # degree -2.5
-pitch_offset: 6.5 # degree 2
+# yaw_offset / pitch_offset：加在 calc_aim 算出的世界系绝对角上的固定角偏置（单位：度）。
+# 只该补「不随距离变的固定角偏差」——电控 pitch 零位、相机安装角这类。
+# 原值 2 / 6.5 与 standard.yaml 里那对历史探针值一模一样，是「验证变量有没有生效」时随手写的，
+# 不是标定结果；6.5° 在 3 m 处就是 0.34 m，凭它打必然偏。所以基准一律取 0。
+# 真要有偏差，用 3 发静止靶量出来再写；临时试验用环境变量覆盖，不改文件：
+#   DSH_YAW_OFFSET=0.3 DSH_PITCH_OFFSET=-1.2 ./build/task_2 configs/sentry.yaml
+yaw_offset: 0.0
+pitch_offset: 0.0
 
 camera_name: "hikrobot"
 exposure_ms: 5.0
@@ -43,3 +55,34 @@ t_camera2gimbal: [0.11245198218973133, 0.016955489261152895, 0.08019399121177885
 
 #####-----gimbal参数-----#####
 com_port: "/dev/gimbal"
+
+#####-----任务二、任务三共用参数-----#####
+# 这六个键原来是缺的：老版哨兵配置只写了相机/云台，代码读不到就用内置默认值。
+# 其中 min_frames_for_fire 内置是 15（0.26 s@58fps），比标准配置的 10 多等 0.09 s，
+# 第一发会被凭空拖后，所以这里显式写死。
+default_bullet_speed: 25.0        # 电控弹速不可用时的兜底
+muzzle_offset_x: 0.171            # 出弹点到 pitch 轴的距离
+target_hold_ms: 300               # 丢目标后用预测值接管云台的时间
+nis_reject_threshold: 16.27       # 4 自由度卡方 99.7% 分位
+min_frames_for_fire: 10           # 滤波器建好后至少 10 帧才允许开火
+max_nis_failure_rate: 0.3         # recent 拒收率超过就认为滤波器不健康
+
+#####-----任务二（中低速小陀螺，5 赫兹，每挡 10 发）-----#####
+# 注意：这一段也不能省。缺了它会静默掉回代码默认值：
+#   max_rounds_per_stage 10（标准配置是 0）、stage_gap_s 3.0、require_auto_aim_mode false
+# 掉回 10 的后果是每挡打完 10 发就锁死，任务三那种 30 秒计时赛直接报废。
+task2:
+  fire_interval_s: 0.2            # 5 赫兹
+  max_rounds_per_stage: 0         # 0 = 不限
+  stage_gap_s: 5.0
+  speed_band_split: 5.0
+  require_auto_aim_mode: true     # 现场已确认 AUTO_AIM；电控回手动就主动交权
+
+#####-----任务三（前哨站，12 赫兹）-----#####
+task3:
+  fire_interval_s: 0.0834
+  max_rounds_per_stage: 0
+  stage_gap_s: 3.0
+  outpost_z_window: 0.30
+  outpost_top_margin: 0.12
+  require_auto_aim_mode: false

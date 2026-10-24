@@ -58,14 +58,20 @@ inline uint8_t to_target_id(auto_aim::ArmorName name)
 //   第 1 步 提前量：把「旋转中心到装甲板」的向量按角速度转过弹丸飞行时间，
 //                   再加上旋转中心自身的平移位移。x 的下标含义见 target.cpp 的状态向量注释。
 //   第 2 步 弹道：把水平距离与高度差交给 tools::Trajectory，
-//                 考虑重力与空气阻力，一次拿到真实的 pitch 和飞行时间；
-//                 再用这个飞行时间回到第 1 步重算提前量，迭代两次足够收敛。
+//                   考虑重力与空气阻力，一次拿到真实的 pitch 和飞行时间；
+//                   再用这个飞行时间回到第 1 步重算提前量，迭代两次足够收敛。
+//
+//   t_extra：飞行时间之外的**额外等待时间**（秒）。用来把「摩擦轮启动到子弹出膛」
+//             这段延时算进预测——官方 sp_vision_25 在 aimer.cpp 的注释里写的是
+//             「detector-aimer 耗时 0.005 + 发弹延时 0.1」，即出弹本身还有约 0.1 s。
+//             不补这一项，4 rad/s 下会系统性偏晚 0.1*14.55 ≈ 1.46°，
+//             比板半宽 1.29° 还大 ⇒ 半数以上必偏。缺省 0 = 不改变原有行为。
 //
 // 直线距离除初速得到的是「几何飞行时间」，既没有重力也没有阻力，
 // 直接用它会打低（3 米、初速 25 米每秒时重力下沉 0.071 米，约 1.35 度）。
 inline void calc_aim(
   const Eigen::VectorXd & x, const Eigen::Vector4d & plate, double v0, double muzzle_offset_x,
-  float & yaw, float & pitch)
+  float & yaw, float & pitch, double t_extra = 0.0)
 {
   // 先用直线距离粗估一次飞行时间
   double t_flight = plate.head(3).norm() / v0;
@@ -73,7 +79,7 @@ inline void calc_aim(
   double pitch_rad = tools::xyz2ypd(plate.head(3))[1];
 
   for (int iter = 0; iter < 2; ++iter) {
-    const double da = x[7] * t_flight;  // x[7] 是 EKF 拟合出来的角速度
+    const double da = x[7] * (t_flight + t_extra);  // x[7] 是 EKF 拟合出来的角速度
     const double ca = std::cos(da), sa = std::sin(da);
     const double rx = plate[0] - x[0];
     const double ry = plate[1] - x[2];

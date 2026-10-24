@@ -6,18 +6,25 @@ rotation_angle: 0
 yolo_name: yolov5
 yolov5_model_path: assets/yolov5.xml
 device: GPU
-min_confidence: 0.8
+min_confidence: 0.88
 use_traditional: true
 roi:
-  x: 460
-  y: 200
-  width: 600
-  height: 600
-use_roi: false
+  x: 304
+  y: 152
+  width: 800
+  height: 800
+use_roi: true
 threshold: 100
 
-yaw_offset: 2 # degree -2.5
-pitch_offset: 6.5 # degree 2
+# yaw_offset / pitch_offset：加在 calc_aim 算出的世界系绝对角上的固定角偏置（单位：度）。
+# 它们只该补「不随距离变的固定角偏差」——电控 pitch 零位、相机安装角这类。
+# 历史值 2 / 6.5 / 10.24 都是“验证这两个变量有没有生效”时随手写的探针值，不是标定结果，
+# 所以基准一律取 0；真要有偏差，用 3 发静止靶量出来再写，别凭感觉填。
+# 现场临时试验可以用环境变量覆盖，不用改这里：
+#   DSH_YAW_OFFSET=0.3 DSH_PITCH_OFFSET=-1.2 ./build/task_2 configs/standard.yaml
+yaw_offset: 0.0
+# 10-23 现场标定：3.1 m 处偏下 10-15 mm ⇒ 0.5 度（yaml 里定稿，命令不必再带 DSH_PITCH_OFFSET）
+pitch_offset: 0.5
 
 camera_name: "hikrobot"
 exposure_ms: 2.5
@@ -53,22 +60,30 @@ target_hold_ms: 300
 # （4 自由度下 95% 分位是 9.488、99% 是 13.28、99.9% 是 18.47，可以按需加减）
 nis_reject_threshold: 16.27
 # 滤波器建立后至少跑多少帧才允许开火（真正的收敛判据之一）
-min_frames_for_fire: 15
+# 15 帧 = 58 fps 下 0.26 秒；开着录包会掉到 45 fps，就变成 0.33 秒，白丢 1-2 发。
+# 10 帧 = 0.17-0.22 秒，够滤波收敛，又不会把第一发拖太久。
+min_frames_for_fire: 10
 # recent_nis_failures 低于这个值才认为滤波器健康
 max_nis_failure_rate: 0.3
 
 #####-----任务二（中低速小陀螺，弹频 5 赫兹、每个转速只许 10 发）-----#####
 task2:
-  fire_interval_s: 0.2        # 5 赫兹
-  max_rounds_per_stage: 10    # 每个转速挡位最多 10 发，超出部分不计分
+  fire_interval_s: 0.2         # 开火节流：>=0.2 s，即 5 赫兹（赛规给的就是 5 Hz，照抄最稳）
+                               # 防「同一块板连吃两发」不靠这个值，靠 plate_armed：
+                               # 打完一发要摆出 DSH_PLATE_REARM_DEG(35°) 或换板才重新上膛，
+                               # 0.2 s 时板子只转过 46°，摆出角度前 facing 已经出窗口了。
+  max_rounds_per_stage: 0      # 不限发数
   # 转速挡位切换的判定窗口：超过这个时间没有新弹丸，且拟合角速度换了挡，
   # 就认为一个转速挡位结束、重新开始计数；超过 3 倍这个时间则一律重新计数。
   stage_gap_s: 5.0
   # 低转速与中转速的分界，要求里写的是 5 弧度每秒
   speed_band_split: 5.0
   # 是否要求云台处于自瞄挡位才接管控制。
-  # 先用 false 跑一次，确认终端日志里 mode 确实是 AUTO_AIM 之后再改成 true。
-  require_auto_aim_mode: false
+  # 现场日志已连续确认 `[dbg] 电控挡位 = AUTO_AIM(自瞄)`，所以置 true：
+  # 电控被拨回手动时软件会主动交权、不再请求开火（否则会出现 rounds 一路涨、
+  # 车上 bullet_count 一动不动的情况，白耗一整个挡位的额度）。
+  # 如果场上电控挡位会抖，改回 false 才是保险的——代价是 IDLE 时也会空转请求。
+  require_auto_aim_mode: true
 
 #####-----任务三（前哨站，弹频 12 赫兹）-----#####
 task3:
