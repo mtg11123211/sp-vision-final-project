@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -49,6 +50,13 @@ int main(int argc, char * argv[])
 
   const double default_bullet_speed = tools::read_or<double>(yaml, "default_bullet_speed", 25.0);
   const double muzzle_offset_x = tools::read_or<double>(yaml, "muzzle_offset_x", 0.171);
+
+  // 2026-10-25（与 task_2 的 pitch_offset 对齐）：垂直零位补偿，单位度。
+  // calc_aim 的弹道解算里 L_y 传的是 0，即假设枪口与光轴同高；实际枪口略低，
+  // 会让所有弹着系统性偏低（现场表现为"打低板也贴下沿、偏下 0.1 板"）。
+  // 这个量就是补那一段：落点偏低就加正数，偏高就加负数。
+  double pitch_offset_deg = tools::read_or<double>(yaml, "pitch_offset", 0.0);
+  if (const char * v = std::getenv("DSH_PITCH_OFFSET")) pitch_offset_deg = std::atof(v);
   const int target_hold_ms = tools::read_or<int>(yaml, "target_hold_ms", 300);
   const double nis_reject_threshold = tools::read_or<double>(yaml, "nis_reject_threshold", 16.27);
   const int min_frames_for_fire = tools::read_or<int>(yaml, "min_frames_for_fire", 15);
@@ -276,9 +284,39 @@ int main(int argc, char * argv[])
     } else {
       const Eigen::VectorXd x = target.ekf_x();
       const auto xyza_list = target.armor_xyza_list();
+      // ---- 到达角门控 DSH_T3_ARRIVE_DEG（缺省 25°；传 0 = 关闭）----
+      // 前哨站 3 块板相隔 120°、ω≈2.5 rad/s(143°/s)，开火到弹着 0.15–0.30 s ⇒ 板转过 20–42°。
+      // 所以"现在正对"的那块到弹着时必然已转走（打上去是斜的），
+      // 必须在 EKF 外推出的 3 块板里挑"弹着瞬间最正"的那块，再按该角度开门。
+      static const double t3_arrive_deg = []() {
+        const char * v = std::getenv("DSH_T3_ARRIVE_DEG");
+        // 2026-10-25 现场冻结：25°。弹着斜角上限 25°，占空比 14%、每窗口约 3 发。
+        return v ? std::atof(v) : 25.0;
+      }();
       int aim_id = target.last_id;
       if (aim_id < 0 || aim_id >= static_cast<int>(xyza_list.size())) aim_id = 0;
-      const Eigen::Vector4d plate = xyza_list[aim_id];
+      Eigen::Vector4d plate = xyza_list[aim_id];
+
+      // 逐层高度修正（现场标定用，单位米，缺省 0 = 完全按模型）。
+      // 2026-10-25 实测：低位板(id=0)与高位板(id=2)已经全中，只有中位板(id=1)
+      // 固定偏低 0.8–1.1 板（约 0.10–0.14 米）⇒ 实车中位板比模型（z4+dh）高。
+      // 模型 dh 是均匀网格，这里只给"某一层"单独加修正，不动其它层的任何参数。
+      // 用法：DSH_DZ1=0.12 ⇒ 只有瞄中位板时抬高 12 厘米。
+      // 2026-10-25 哨兵现场冻结：0.040 / 0.200 / 0.150（三层全部落板中心）。
+      static const double dz0 = []() {
+        const char * v = std::getenv("DSH_DZ0");
+        return v ? std::atof(v) : 0.040;
+      }();
+      static const double dz1 = []() {
+        const char * v = std::getenv("DSH_DZ1");
+        return v ? std::atof(v) : 0.200;
+      }();
+      static const double dz2 = []() {
+        const char * v = std::getenv("DSH_DZ2");
+        return v ? std::atof(v) : 0.150;
+      }();
+      const double dz_trim = (aim_id == 0) ? dz0 : ((aim_id == 1) ? dz1 : dz2);
+      plate[2] += dz_trim;
 
       double bullet_speed = gimbal_state.bullet_speed;
       if (bullet_speed < 5.0) {
@@ -292,6 +330,21 @@ int main(int argc, char * argv[])
         bullet_speed = default_bullet_speed;
       }
 
+      // 到达时刻的板朝向（度）：外法线随靶子以 w 转 ⇒ 现在朝向 + w·t_arrive
+      const double center_bearing_now = std::atan2(-x[2], -x[0]);
+      const auto facing_arrive_of = [&](const Eigen::Vector4d & p) {
+        const double f_now =
+          tools::limit_rad(p(3) + M_PI - center_bearing_now) * 57.29577951308232;
+        const double t_arr = p.head(3).norm() / std::max(1.0, bullet_speed) + lead_s;
+        return f_now + x[7] * t_arr * 57.29577951308232;
+      };
+      // 2026-10-25 现场：**不做跨板重选**。
+      // 前哨站三块板不仅相隔 120 度，而且分层布置（每层一块），换板就等于换瞄准高度
+      // ——表现就是「打中板落到下板、打上板落到中板」，每次正好低一块。
+      // 所以门控只判「当前这块板（last_id，画面里正在跟的那块）到弹着时的朝向」，
+      // 绝不因为另一块更正面就把炮口挪到别的层去。
+      // 需要「只打最正那块」的单层靶时，本逻辑也就退化为不重选，不影响。
+
       // 提前量 + 弹道解算。
       // 前哨站的切向速度只有约 0.69 米每秒（2.5 弧度每秒 乘 0.2765 米），
       // 提前量约 0.08 米；而 3 米处重力下沉约 0.071 米，对应 pitch 误差 1.35 度，
@@ -302,14 +355,36 @@ int main(int argc, char * argv[])
       // 视在角速度×lead 的小角近似在超前>40°失效（cos 为负），中速相位失配可达上百毫秒。
       task_common::calc_aim(
         x, plate, bullet_speed, muzzle_offset_x, aim_yaw, aim_pitch, lead_s);
+      aim_pitch += static_cast<float>(pitch_offset_deg * M_PI / 180.0);
 
       // 视在角速度线性补偿已删除：其功能由 calc_aim 的 t_extra 精确旋转接管
       // （与 task_2 E1 同步，2026-10-24）。两处并存会把同一段 lead 补两次（过头 0.83°+）。
 
       const double nis_failure_rate = target.ekf().data.at("recent_nis_failures");
-      const bool stable = target.is_converged() && frames_since_init >= min_frames_for_fire &&
-                          nis_failure_rate < max_nis_failure_rate;
-      const bool interval_ok = tools::delta_time(now, last_fire_time) >= fire_interval_s;
+      // ---- DSH_FIRE_RELAX：0 = 原行为（缺省）；1 = 只补丢帧；2 = 再跳预热 ----
+      // 1：丢帧不再立刻断火，短时 HOLD 也允许开火；但**仍然要求**滤波器已收敛、
+      //    预热帧数够、NIS 拒收率达标 —— 也就是"已经瞄稳了，只是这一帧没看见"。
+      // 2：在 1 的基础上再跳过预热帧与 NIS 门，连第一帧捕获也立即开火。
+      // 分级的理由：丢帧是"已知会恢复的短暂失明"，跳预热是"还没瞄稳就打"，风险不同。
+      // 两档都仍然挡住的：没有目标、目标丢失超过 target_hold_ms、
+      //                   滤波器发散（r/dh 跑出物理范围）、发数上限、自瞄挡、人工门。
+      static const int fire_relax = []() {
+        const char * v = std::getenv("DSH_FIRE_RELAX");
+        // 2026-10-25 现场冻结：1（丢帧不再立刻断火；仍要求已收敛、预热够、NIS 达标）。
+        return v ? std::atoi(v) : 1;
+      }();
+      const bool target_alive =
+        has_target && !target.diverged() &&
+        (now - last_seen) < std::chrono::milliseconds(target_hold_ms);
+      const bool relax_lv1 = fire_relax >= 1 && target_alive;
+      const bool relax_lv2 = fire_relax >= 2 && target_alive;
+      const bool stable =
+        relax_lv2 || (target.is_converged() && frames_since_init >= min_frames_for_fire &&
+                      nis_failure_rate < max_nis_failure_rate);
+      // relax 下把间隔放宽 1%，让"每 5 帧发一次"的帧率量化正好落到 12 Hz：
+      // 60 fps 时 5 帧 = 83.35 ms，比 83.4 ms 只差 0.05 ms，不放宽就会掉到 6 帧 = 10 Hz。
+      const double fire_interval_eff = fire_interval_s * (fire_relax >= 1 ? 0.99 : 1.0);
+      const bool interval_ok = tools::delta_time(now, last_fire_time) >= fire_interval_eff;
       const bool rounds_ok =
         (max_rounds_per_stage <= 0) || (rounds_this_stage < max_rounds_per_stage);
       const bool mode_ok = !require_auto_aim_mode || gimbal.mode() == io::GimbalMode::AUTO_AIM;
@@ -318,8 +393,14 @@ int main(int argc, char * argv[])
       //
       // 新增：人按住 F 才允许开火（默认关）。低位靶规则在任务三已摘除（见上面的说明）。
       const bool key_ok = !fire_key_enabled || fire_key_gate.allowed();
-      const bool fire =
-        has_detection && stable && interval_ok && rounds_ok && mode_ok && !holding && key_ok;
+      // ---- 到达角门控：只在「弹着瞬间板基本正对」时开火（t3_arrive_deg 已在上面读取）----
+      const double facing_arrive_deg = (t3_arrive_deg > 0.0) ? facing_arrive_of(plate) : 0.0;
+      const bool timing_ok =
+        (t3_arrive_deg <= 0.0) || (std::abs(facing_arrive_deg) <= t3_arrive_deg);
+      // relax 下用"目标还活着"替代"这一帧必须看见"；门控其余部分不变
+      const bool observed_ok = has_detection || relax_lv1;
+      const bool fire = observed_ok && stable && interval_ok && rounds_ok && mode_ok &&
+                        timing_ok && (!holding || relax_lv1) && key_ok;
 
       if (fire) {
         last_fire_time = now;
@@ -335,8 +416,9 @@ int main(int argc, char * argv[])
       tools::draw_text(
         img,
         fmt::format(
-          "{} yaw {:.2f} pitch {:.2f} dist {:.2f} w {:.2f} rounds {}", holding ? "HOLD" : "AIM",
-          aim_yaw, aim_pitch, plate.head(3).norm(), x[7], rounds_this_stage),
+          "{} yaw {:.2f} pitch {:.2f} dist {:.2f} w {:.2f} rounds {}  arr {:.0f}deg(gate {:.0f})",
+          holding ? "HOLD" : "AIM", aim_yaw, aim_pitch, plate.head(3).norm(), x[7],
+          rounds_this_stage, facing_arrive_deg, t3_arrive_deg),
         cv::Point(10, 70), cv::Scalar(0, 255, 255), 1.0, 2);
       // 新增策略的状态条（2026-10-21：任务三已摘除低位靶门，删掉 low.aim_is_low/low.dz
       // ——本文件没 include low_plate.hpp、也没有 low 的声明，原本是编译错误。
@@ -344,11 +426,19 @@ int main(int argc, char * argv[])
       const char * gate_txt = !fire_key_enabled
                                 ? "OFF(auto)"
                                 : (fire_key_gate.allowed() ? "ARM" : "SAFE");
-      tools::draw_text(
-        img,
-        fmt::format(
-          "F={} ({})  lowgate=OFF  aim_id={}", gate_txt, fire_key_gate.backend_name(), aim_id),
-        cv::Point(10, 95), cv::Scalar(0, 255, 255), 0.6, 1);
+      // 2026-10-25：补偿量（dz）单独用红色画，现场一眼能认出当前生效的那一档。
+      // 拆成两段画：先量前缀宽度再接着画，避免写死偏移量后错位。
+      const std::string hud2_head = fmt::format(
+        "F={} ({})  relax={}  aim_id={}  z={:.3f} z4={:.3f} dh={:.3f} ", gate_txt,
+        fire_key_gate.backend_name(), fire_relax, aim_id, plate[2], x[4], x[9]);
+      const std::string hud2_dz = fmt::format("dz={:+.3f}", dz_trim);
+      tools::draw_text(img, hud2_head, cv::Point(10, 95), cv::Scalar(0, 255, 255), 0.6, 1);
+      {
+        int base_w = 0;
+        const cv::Size hs = cv::getTextSize(hud2_head, cv::FONT_HERSHEY_SIMPLEX, 0.6, 1, &base_w);
+        tools::draw_text(
+          img, hud2_dz, cv::Point(10 + hs.width, 95), cv::Scalar(0, 0, 255), 0.6, 1);
+      }
 
       plotter.plot({
         {"task3_aim",
@@ -367,6 +457,23 @@ int main(int argc, char * argv[])
 
     // 窗口状态条：放在所有分支之外，没目标时也要画，否则看不出程序还活着
     hud.draw(img, armors, chosen, frame_id, has_target, holding);
+
+    // 窗口尺寸：imshow 缺省建的是 AUTOSIZE 窗口，现场 4K 屏上会铺满、且拖不动。
+    // 先建成 WINDOW_NORMAL 再一次性 resize；大小可用 DSH_WIN_W / DSH_WIN_H 覆盖。
+    static const int win_w = []() {
+      const char * v = std::getenv("DSH_WIN_W");
+      return v ? std::atoi(v) : 960;
+    }();
+    static const int win_h = []() {
+      const char * v = std::getenv("DSH_WIN_H");
+      return v ? std::atoi(v) : 640;
+    }();
+    static bool win_ready = false;
+    if (!win_ready) {
+      cv::namedWindow("task3", cv::WINDOW_NORMAL);
+      cv::resizeWindow("task3", win_w, win_h);
+      win_ready = true;
+    }
 
     cv::imshow("task3", img);
     const int key_code = cv::waitKey(1);

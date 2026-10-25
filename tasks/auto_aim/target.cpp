@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <numeric>
 
 #include "tools/logger.hpp"
@@ -100,8 +101,16 @@ Target::Target(
     // 图纸上量得相邻两块约差 0.1 米，所以 dh1 = dh2 = 0.1。
     // 注意：这两个量在 update_ypda 里被冻结（前哨站几何列不做量测更新），
     // 所以如果现场实测发现图纸值与实物不符，要改的是这两个初值，而不是等滤波器自己学。
-    x0[9] = 0.1;   // dh1
-    x0[10] = 0.1;  // dh2
+    // 2026-10-25 现场卷尺实测：相邻两级台阶 0.10 米，与图纸一致 ⇒ 缺省 0.1 正确。
+    // （早期曾按落点反推得到 0.23 米，是错的：那次落点偏差来自 id 锚点错位与俯仰零位，
+    //  不是层高。层高一旦按 0.23 设，中/高板会分别偏高 0.13 / 0.26 米。）
+    // 现场仍可用 DSH_OUTPOST_DH 覆盖，免得每换一个值都重编。
+    static const double outpost_dh = []() {
+      const char * v = std::getenv("DSH_OUTPOST_DH");
+      return v ? std::atof(v) : 0.1;
+    }();
+    x0[9] = outpost_dh;   // dh1
+    x0[10] = outpost_dh;  // dh2
   }
 
   Eigen::Matrix<double, 11, 11> P0 = P0_dig.asDiagonal();
@@ -364,8 +373,8 @@ bool Target::diverged() const
   // 前哨站三块板共用同一半径，高度差是分层量，单独判两个高度差是否合理
   if (is_layered_outpost()) {
     // 注意要判正负：只用 abs 的话台阶可以翻过来（本来高的一层跑到下面），滤波器却认为没发散
-    auto dh1_ok = ekf_.x[9] > 0.0 && ekf_.x[9] < 0.3;
-    auto dh2_ok = ekf_.x[10] > 0.0 && ekf_.x[10] < 0.3;
+    auto dh1_ok = ekf_.x[9] > 0.0 && ekf_.x[9] < 0.55;
+    auto dh2_ok = ekf_.x[10] > 0.0 && ekf_.x[10] < 0.55;
     if (r_ok && dh1_ok && dh2_ok) return false;
     tools::logger()->debug("[Target] r={:.3f}, dh1={:.3f}, dh2={:.3f}", ekf_.x[8], ekf_.x[9], ekf_.x[10]);
     return true;
