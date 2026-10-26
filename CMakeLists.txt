@@ -25,8 +25,6 @@ add_subdirectory(io)
 add_subdirectory(tasks/auto_aim)
 
 ####################src###################
-add_executable(task_1 src/task_1.cpp)
-add_executable(task_2 src/task_2.cpp)
 add_executable(task_3 src/task_3.cpp)
 
 # 按键门自测程序：只依赖 src/fire_key.hpp（零工程依赖），不碰相机/云台/Eigen。
@@ -34,6 +32,4 @@ add_executable(task_3 src/task_3.cpp)
 #   ./build/keytest
 add_executable(keytest tools/keytest.cpp)
 
-target_link_libraries(task_1 ${OpenCV_LIBS} auto_aim fmt::fmt yaml-cpp tools io)
-target_link_libraries(task_2 ${OpenCV_LIBS} auto_aim fmt::fmt yaml-cpp tools io)
 target_link_libraries(task_3 ${OpenCV_LIBS} auto_aim fmt::fmt yaml-cpp tools io)

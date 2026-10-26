@@ -2,16 +2,30 @@
 
 RM 上位机视觉大作业 fp_aim：task_1 基础自瞄、task_2 小陀螺、task_3 前哨站。
 
+> 本分支为**任务三：前哨站**的提交版：只保留 src/task_3.cpp 与 task_3 构建目标。
+> 三个任务的完整整合版见 main 分支。
+
 ## 分支与标签
+
+```
+main     ──●──●──●──●                最新整合线（三个任务全部可跑）
+           \
+task1       ●                       任务一：基础自瞄
+task2       ●                       任务二：小陀螺，冻结 lead 与 pitch_offset
+task3       ●                       任务三：前哨站，冻结到达角门控与逐层高度
+```
 
 | 引用 | 说明 |
 |---|---|
-| `main` | 开发线，任务代码 + 录包回放工具 |
-| `submit/task_1` | task_1 提交线，tag `task1-1017`、`task1-1018` |
-| `offline_replay` | 录包回放工具线 |
+| `main` | 主线，三个任务的最新代码，与下面三条任务分支同源 |
+| `task1` | 任务一：单板自瞄与弹道解算 |
+| `task2` | 任务二：小陀螺，冻结 `lead` 低速 0 / 中高速 0.024、`pitch_offset` 0.5° |
+| `task3` | 任务三：前哨站，冻结到达角门控 25°、逐层高度 0.040 / 0.200 / 0.150 米、丢帧不断火 |
 | `v0.1` | 任务一二三完成 |
 | `v0.2` | YOLO CPU 回退 |
 | `v0.3` | 云台 pitch 取反 |
+
+三条任务分支共用同一套 `io/`、`tasks/auto_aim/`、`tools/`，任务间差异只在各自的 `src/task_N.cpp` 与运行配置（`configs/standard.yaml` 步兵、`configs/sentry.yaml` 哨兵）。
 
 ## 提交日志
 
@@ -35,15 +49,19 @@ RM 上位机视觉大作业 fp_aim：task_1 基础自瞄、task_2 小陀螺、ta
 | 10-18 | chore：.gitignore 只留构建与数据项 |
 | 10-18 | docs：README 改为条目式并补提交表 |
 | 10-18 | fix(armor)：颜色映射按实车模型改为 0 红 1 蓝 |
+| 10-18 | docs：提交表去掉短 SHA，改用日期与 tag |
+| 10-24 | feat(task2)：冻结现场实测参数（lead 低速 0 / 中高速 0.024，pitch_offset 0.5） |
+| 10-25 | feat(task3)：冻结前哨站实测参数（到达角门控 25°、逐层高度 0.040/0.200/0.150） |
 
 ## 目录
 
 ```
-src/              三个任务主循环
-tasks/auto_aim/   装甲板检测、目标建模与 EKF、弹道解算
+src/              三个任务主循环（task_1 / task_2 / task_3）+ 共用弹道解算与 HUD
+tasks/auto_aim/   装甲板检测、PnP 解算、目标建模与 EKF
 io/               海康相机驱动、云台串口、视频回放
 tools/            EKF、弹道、CRC、Plotter、日志、录包回放
-configs/          standard.yaml、sentry.yaml
+tools/onsite/     现场部署脚本：打包、上传、运行、取数
+configs/          standard.yaml（步兵）、sentry.yaml（哨兵）、submit.yaml（考试）
 assets/           YOLOv5 OpenVINO IR 模型
 ```
 
