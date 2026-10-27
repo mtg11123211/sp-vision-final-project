@@ -253,13 +253,31 @@ int main(int argc, char * argv[])
       auto & armor = *chosen;
       if (!has_target || target.name != armor.name) {
         // 第一次出现前哨站：建 3 块板的滤波器
-        target = auto_aim::Target(armor, t, 0.0, 0);
-        has_target = true;
-        frames_since_init = 0;
+        // F4 门禁：单帧 PnP 初值越界（valid()=false）⇒ 不入役，下一帧再试。
+        // 宁可丢这一帧，也不让坏初值锁死整场（几何列冻结，滤波器学不回来）。
+        auto_aim::Target fresh(armor, t, 0.0, 0);
+        if (fresh.valid()) {
+          target = fresh;
+          has_target = true;
+          frames_since_init = 0;
+        }
       } else {
         target.predict(t);
         if (!target.update_checked(armor, nis_reject_threshold)) {
           tools::logger()->debug("[task3] 这一帧观测被 NIS 门限拒收");
+          // ---- F1/F2 看门狗（2026-10-27）：连续 20 帧（≈0.35 s）全被拒 ⇒ 滤波器锁死 ----
+          // 这是死锁唯一现场自救路径：不重建就只能重启进程。
+          if (target.needs_reinit()) {
+            tools::logger()->warn(
+              "[task3] 连续 {} 帧 NIS 拒收，判定滤波器锁死 ⇒ 用当前帧重建", target.reject_streak());
+            auto_aim::Target fresh(armor, t, 0.0, 0);
+            if (fresh.valid()) {
+              target = fresh;
+              frames_since_init = -1;  // 尾部统一 ++，抵消成 0，重新走预热
+            } else {
+              has_target = false;      // 重建初值也越界 ⇒ 本帧当没目标，下一帧再试
+            }
+          }
         }
         frames_since_init++;
       }
@@ -272,8 +290,13 @@ int main(int argc, char * argv[])
 
     if (has_target && target.diverged()) {
       if (has_detection) {
-        target = auto_aim::Target(*chosen, t, 0.0, 0);
-        frames_since_init = 0;
+        auto_aim::Target fresh(*chosen, t, 0.0, 0);
+        if (fresh.valid()) {
+          target = fresh;
+          frames_since_init = 0;
+        } else {
+          has_target = false;  // 发散 + 坏初值：丢弃，下一帧重来
+        }
       } else {
         has_target = false;
       }

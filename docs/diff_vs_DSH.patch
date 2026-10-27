@@ -1,0 +1,687 @@
+﻿diff --no-index 副本(D:\MTG\Documents\OC\fp_aim_fkey) vs 原工程(D:\DSH\fp_aim)   生成于 2026-10-21（三审11条 + 一包流 + 数据测定流水线）
+
+### ===== src\task_2.cpp =====
+diff --git "a/D:\\DSH\\fp_aim\\src\\task_2.cpp" "b/D:\\MTG\\Documents\\OC\\fp_aim_fkey\\src\\task_2.cpp"
+index 944822d..ab748c5 100644
+--- a/src\task_2.cpp
++++ b/src\task_2.cpp
+@@ -8,9 +8,13 @@
+ #include "io/camera.hpp"
+ #include "io/gimbal/gimbal.hpp"
+ #include "src/detect_log.hpp"
++#include "src/env_util.hpp"
++#include "src/fire_key.hpp"
+ #include "src/latency_probe.hpp"
++#include "src/low_plate.hpp"
+ #include "src/overlay.hpp"
+ #include "src/task_common.hpp"
++#include "src/test_summary.hpp"
+ #include "tasks/auto_aim/solver.hpp"
+ #include "tasks/auto_aim/target.hpp"
+ #include "tasks/auto_aim/yolo.hpp"
+@@ -28,6 +32,48 @@ const std::string keys =
+ 
+ using namespace std::chrono_literals;
+ 
++// ---- 寮€鐏棬寰界珷锛堝彸涓婅澶ц壊鍧楋紝杩滆窛绂诲彲瑙侊級----
++// 鏀惧湪 task_2.cpp 鍐呴儴鑰屼笉鏄?fire_key.hpp锛氬悗鑰呬繚鎸侀浂宸ョ▼渚濊禆锛宬eytest 鎵嶈兘鍗曠嫭缂栬瘧銆?+// 娉ㄦ剰锛氬睆骞曚笂鐨勬枃瀛?*蹇呴』鐢?ASCII** 鈥斺€?cv::putText 鐨?Hershey 瀛椾綋涓嶆敮鎸佷腑鏂囷紝
++// 鍐欎腑鏂囦細鍙樻垚涓€涓蹭贡鐮侊紙杩欏潙鎴戣俯杩囦竴娆★級銆傛棩蹇楅噷鍙互闅忎究鐢ㄤ腑鏂囥€?+namespace
++{
++// 鍙充笂瑙掔殑寮€鐏棬寰界珷銆?*灞忓箷鏂囧瓧涓€寰?ASCII**锛坈v::putText 鐨?Hershey 瀛椾綋涓嶆敮鎸佷腑鏂囷級銆?+// 绗竴琛?= 寮€鐏棬鐘舵€侊紙闂ㄥ叧 / 鍚庣寮傚父 / ARM / SAFE锛夛紱
++// 绗簩琛?= 鐜板湪**涓轰粈涔堟墦涓嶅嚭**锛圧EADY = 鍏跺畠鏉′欢閮芥弧瓒炽€侀殢鏃惰兘鎵擄級銆?+void draw_fire_badge(
++  cv::Mat & img, bool enabled, bool allowed, bool degraded, const std::string & backend,
++  const std::string & state)
++{
++  const int w = 240, h = 74;
++  const cv::Rect box(img.cols - w - 12, 12, w, h);
++  cv::Scalar bg(90, 90, 90), fg(255, 255, 255);
++  std::string text;
++  if (!enabled) {
++    bg = {90, 90, 90};
++    text = "GATE OFF (auto fire)";
++  } else if (degraded) {
++    bg = {0, 200, 255};
++    fg = {0, 0, 0};
++    text = "BACKEND ERR " + backend;
++  } else if (allowed) {
++    bg = {0, 190, 0};
++    text = "ARM  FIRE ALLOWED";
++  } else {
++    bg = {0, 0, 235};
++    text = "SAFE NO FIRE";
++  }
++  cv::rectangle(img, box, bg, cv::FILLED);
++  cv::putText(
++    img, text, cv::Point(box.x + 8, box.y + 32), cv::FONT_HERSHEY_SIMPLEX, 0.62, fg, 2,
++    cv::LINE_AA);
++  // 鍓爣棰橈細READY 璇存槑鐜板湪灏卞樊"鎸変笅 F"杩欎竴姝?+  cv::putText(
++    img, state, cv::Point(box.x + 8, box.y + 62), cv::FONT_HERSHEY_SIMPLEX, 0.55, fg, 1,
++    cv::LINE_AA);
++}
++}  // namespace
++
+ int main(int argc, char * argv[])
+ {
+   cv::CommandLineParser cli(argc, argv, keys);
+@@ -163,6 +209,108 @@ int main(int argc, char * argv[])
+     arrive_watchdog_shots > 0 ? std::to_string(arrive_watchdog_shots) + " 鍙戝悗瑙ｉ櫎" : "鍏?,
+     plate_facing_deg, plate_rearm_deg, fire_interval_s);
+ 
++  // ================= 鏂板绛栫暐 1锛氬彧鎵撲綆浣嶉澏锛屼笉鎵撻珮浣嶉澏锛堜笁鎬侊級=================
++  // 鍙ｅ緞淇锛?026-10-21 璇勫锛夛細鍑犱綍鍒楀彧鍦?*棣栨鎹㈡澘鍓?*鍐荤粨锛屾崲鏉垮悗鏄厑璁稿崟鏉胯娴嬫洿鏂?+  // 楂樺害宸殑 鈬?x[10] 鏄?浠?0 璧锋銆侀潬鎹㈡澘瑙傛祴鎱㈡參鏀舵暃"锛?*鏀舵暃鍓?*楂樻澘 z 鍋忎綆銆?+  // 鎵€浠?姘镐箙鍙墦浣庝綅"鏄妸鐬€侀棶棰樺綋姘镐箙闂 鈬?鏀规垚涓夋€侊細
++  //   0/off 瀹屽叏涓嶅弬涓庯綔1/warmup銆愰粯璁ゃ€戜笉鍙俊鏃跺彧鎵撲綆浣嶃€佸彲淇″悗鑷姩鏀惧紑锝?/always 姘歌繙鍙墦浣庝綅
++  std::string low_mode_raw = "";
++  const policy::LowMode low_mode = policy::parse_low_mode(std::getenv("DSH_LOW_PLATE"), &low_mode_raw);
++  const double low_plate_z_tol = policy::env_double("DSH_LOW_PLATE_Z_TOL", 0.10);
++  // 楂樺害宸?绋冲畾淇濇寔"澶氫箙灏辫涓哄凡鏀舵暃锛坵armup 鏀惧紑楂樻澘鐨勯棬妲涳級
++  const double low_trust_s = policy::env_double("DSH_LOW_PLATE_TRUST_S", 4.0);
++  policy::LowPlateGate low_gate(low_mode, low_plate_z_tol, low_trust_s);
++
++  // ================= 瀹樻柟 sp_vision_25 鐨勪笁鏉℃€濊矾锛堥粯璁ゅ叏鍏筹紝涓€椤逛竴椤?A/B锛?================
++  // 鈶?鍑哄脊寤舵椂锛堟懇鎿﹁疆浠庢帴鍒板紑鐏寚浠ゅ埌瀛愬脊鍑鸿啗锛屽畼鏂规敞閲婂啓 0.1 s锛夛細
++  //    **鏂规鈶狅細浠?2026-10-21 璧凤紝瀹冨彧浣滆褰?鎷嗗垎鏍囨敞锛屼笉鍐嶅崟鐙疮鍔犮€?*
++  //    鍏ㄩ儴"闈為琛?鐨勬彁鍓嶉噺閮芥斁杩?DSH_LEAD锛? 鎬绘彁鍓嶉噺锛夆噿 **缁撴瀯涓婃潨缁?鍚屼竴娈靛欢杩熻ˉ涓ゆ"**
++  //    锛堜互鍓?DSH_LEAD=0.057 + DSH_FIRE_DELAY=0.057 浼氭妸 57 ms 琛ヤ袱閬?鈬?琛ヨ繃澶?0.83掳锛?+  //      杩樹細璁╀汉璇垽鎴?绗﹀彿鍙嶄簡"鑰屽幓缈昏浆绗﹀彿锛岃秺淇秺绯燂級銆?+  //    瑕佹敼琛ュ伩閲?鈬?鍙敼 DSH_LEAD 涓€涓棆閽紱杩欎釜鏁扮暀鐫€鏄负浜嗘妸"鍏朵腑鍑哄脊绾﹀灏?璁拌繘鏃ュ織銆?+  const double fire_delay_report_s = policy::env_double("DSH_FIRE_DELAY", 0.0);
++  // 鈶?閫夋澘鐢?寮逛父鍒拌揪鏃跺埢"鐨勬湞鍚戯細瀹樻柟 aimer.cpp 鏄厛 predict(future + fly_time) 鍐嶉€夋澘銆?+  //    杩欓噷鐢ㄧ瓑浠峰啓娉曪細facing 浠?w 鍙樺寲 鈬?鍒拌揪鏃舵湞鍚?= 鐜板湪鐨勬湞鍚?+ w * t_arrive銆?+  const bool aim_select_arrival =
++    (std::string(std::getenv("DSH_AIM_SELECT") ? std::getenv("DSH_AIM_SELECT") : "current") ==
++     "arrival");
++  // 鈶?鍒颁綅瀹归檺鎸?绾挎€ц窛绂?缁欙細瀹樻柟 shooter 鏄?3掳(杩?/2掳(杩? 鈮?鎭掑畾 105 mm锛?+  //    鏈伐绋嬪師鏉ュ浐瀹?0.8掳锛?.15 m 澶勫彧鏈?44 mm锛夛紝姣斿畼鏂逛弗 2.4 鍊?鈬?鍙兘姘歌繙鎵撲笉寮€銆?+  const double arrive_mm = policy::env_double("DSH_ARRIVE_MM", 0.0);
++
++  // ================= 鏂板绛栫暐 2锛氫汉鎸変綇 F 鎵嶅厑璁稿紑鐏?=================
++  // 绋嬪簭涓€鐩磋窡韪€佷竴鐩磋В绠楋紝浣嗗彧鏈変汉璁や负鍙互鎵撲簡鎵嶆墸鎵虫満銆?+  // DSH_FIRE_KEY=hold锛堥粯璁わ級/toggle/always/never锛屽彇閿悗绔 src/fire_key.hpp銆?+  // **榛樿鍏?*锛?026-10-21 璇勫淇 3锛夛細姝ｅ紡鎻愪氦姣忎换鍔″彧鏈変竴娆℃満浼氾紝
++  // 鎿嶄綔鍛樺繕鎸?F = 鏁村満闆跺彂锛涜皟璇曟湡鏄惧紡寮€锛孒UD 寰界珷浼氫竴鐩存樉绀哄綋鍓嶇姸鎬併€?+  const bool fire_key_enabled = policy::env_bool("DSH_FIRE_KEY_ENABLE", false);
++  fire_key::Gate fire_key_gate;
++
++  // 鎬绘彁鍓嶉噺锛堢锛夛細DSH_LEAD = 閾捐矾 + 浜戝彴婊炲悗 + 鍑哄脊寤舵椂锛?*鏂规鈶犱笅杩欐槸鍞竴鐨勫姛鑳芥棆閽?*銆?+  // 澹版槑鎻愬墠鍒伴€夋澘涔嬪墠锛屽洜涓哄埌杈炬椂鍒?t_arrive 涔熻鐢ㄥ畠锛堝埌杈炬椂鍒?= 鎬绘彁鍓?+ 椋炶锛夈€?+  // 娉ㄦ剰锛歴tatic 鍙湪杩涚▼鍚姩鏃惰涓€娆?鈬?鏀硅繖涓幆澧冨彉閲忓繀椤婚噸鍚繘绋嬨€?+  static const double lead_s = []() { const char * v = std::getenv("DSH_LEAD"); return v ? std::atof(v) : 0.0; }();
++
++  // 闈欐闈跺垽瀹氬弬鏁帮細闃堝€兼寜"姣忕搴︽暟"缁欙紙涓庡抚鐜囨棤鍏筹級锛屽啀鍙犲姞"杩炵画甯ф暟"銆?+  // DSH_STATIC_RATE_DPS锛氶粯璁?30 掳/s锛堢瓑浠蜂簬 60 fps 涓?0.5掳/甯э級锛汥SH_STATIC_FRAMES锛氶粯璁?10 甯с€?+  const double static_rate_dps = policy::env_double("DSH_STATIC_RATE_DPS", 30.0);
++  const int static_frames_needed = []() {
++    const int n = static_cast<int>(policy::env_double("DSH_STATIC_FRAMES", 10.0));
++    return n > 0 ? n : 1;  // 鈽?锛?/璐熸暟浼氬彉鎴?姘稿垽闈欐"鈬?涓€鍧楁澘杩炴墦锛屽繀椤?clamp
++  }();
++
++  // ---- 娴嬭瘯姹囨€诲櫒锛氶€€鍑烘椂锛堟垨鎸?s锛夋妸 A/B/C 涓夌粍鐨勬暟涓€娆℃€ф墦鍑烘潵 ----
++  // 鐩殑锛氳繖浜涙暟鏁ｈ惤鍦ㄥ惎鍔ㄦ棩蹇椼€乤rrive/fire-gate 琛屻€乴at CSV 閲岋紝鍑犵櫨琛屾棩蹇楃炕鐫€鎵惧緢瀹规槗婕忛」銆?+  // 椤哄甫鎶?*鍚姩鏃ュ織鍘熸牱鏀惰繘鏉?* 鈬?閫€鍑烘椂杈撳嚭鐨勯偅涓€鍧楄嚜甯?杩欐鏄€庝箞璺戠殑"锛屾槸鑷唇鐨勮褰曘€?+  summary::TestSummary test_summary;
++  {
++    const char * tag_env = std::getenv("DSH_TEST_TAG");
++    const std::string tag = (tag_env != nullptr && tag_env[0] != '\0') ? tag_env : "run";
++    test_summary.configure(
++      tag,
++      arrive_mm > 0.0 ? fmt::format("{:.0f} mm锛堟寜璺濈鎹㈢畻锛?, arrive_mm)
++                      : fmt::format("{:.2f}掳锛堝浐瀹氳搴︼級", arrive_tol_deg),
++      fmt::format("{}锛屽宸?{:.2f} m锛屼俊浠?{} s", policy::low_mode_name(low_mode), low_plate_z_tol,
++                  low_trust_s),
++      fmt::format("{}锛屼汉宸ラ棬={}", fire_key_gate.backend_name(),
++                  fire_key_enabled ? "寮€" : "鍏?),
++      fmt::format("{:.3f} s", lead_s), fmt::format("{:.3f} s", fire_delay_report_s),
++      aim_select_arrival ? "鍒拌揪鏃跺埢(arrival)" : "褰撳墠(current)",
++      fmt::format("{:.0f} 掳/s 脳 {} 甯?, static_rate_dps, static_frames_needed),
++      fmt::format("{:.2f} s", fire_interval_s), lead_s, fire_delay_report_s);
++  }
++  // 鍚姩鏃ュ織锛氭棦鎵撳嚭鏉ワ紝涔熸敹杩涙眹鎬伙紙閫€鍑烘椂鍘熸牱闄勫湪姹囨€绘渶鍚庯級
++  auto startup_log = [&test_summary](const std::string & s) {
++    tools::logger()->info("{}", s);
++    test_summary.add_startup(s);
++  };
++
++  startup_log(fmt::format(
++    "[task2] 浣庝綅闈惰鍒?= {}锛圖SH_LOW_PLATE=\"{}\"锛岄珮搴﹀宸?{:.2f} m锛屼俊浠?{} s锛夛綔"
++    "浜哄伐寮€鐏棬 = {}锛堟ā寮?{}锛屾寜閿悗绔?{}锛?,
++    policy::low_mode_name(low_mode), low_mode_raw, low_plate_z_tol, low_trust_s,
++    fire_key_enabled ? "寮€" : "鍏?, fire_key_gate.mode_text(), fire_key_gate.backend_name()));
++  startup_log(fmt::format(
++    "[task2] 鍑哄脊寤舵椂锛堣褰曞€硷紝涓嶅崟鐙疮鍔狅級= {:.3f} s锝滈€夋澘 = {}锝滃埌浣嶅闄?= {}锝?
++    "闈欐闈跺垽鎹?= {:.0f} 掳/s 涓旇繛缁?{} 甯?,
++    fire_delay_report_s, aim_select_arrival ? "鍒拌揪鏃跺埢(arrival)" : "褰撳墠(current)",
++    arrive_mm > 0.0 ? fmt::format("{:.0f} mm锛堟寜璺濈鎹㈢畻锛?, arrive_mm)
++                    : fmt::format("{:.2f}掳锛堝浐瀹氳搴︼級", arrive_tol_deg),
++    static_rate_dps, static_frames_needed));
++  // 棰勬祴鏃跺煙鍒嗚В锛堟柟妗堚憼锛夛細**鎬绘彁鍓嶉噺 = DSH_LEAD锛屾槸鍞竴鐨勫姛鑳芥棆閽?*锛?+  // DSH_FIRE_DELAY 鍙敤鏉ヨ褰?鍏朵腑鍑哄脊寤舵椂绾﹀灏?锛?*涓嶅啀鍗曠嫭绱姞**锛堥槻鍚屼竴娈佃ˉ涓ゆ锛夈€?+  startup_log(fmt::format(
++    "[task2] 棰勬祴鏃跺煙 = 鎬绘彁鍓?{:.3f}s锛堝叾涓嚭寮瑰欢鏃剁害 {:.3f}s锛屼粎璁板綍涓嶅崟鐙疮鍔狅級+ 椋炶 ~{:.3f}s锛?.15 m @25 m/s 浼帮級",
++    lead_s, fire_delay_report_s, 3.15 / 25.0));
++  if (fire_delay_report_s > 0.0 && lead_s <= 0.0) {
++    const std::string warn = fmt::format(
++      "[task2] 鈿?DSH_FIRE_DELAY={:.3f}s 宸茶锛屼絾 DSH_LEAD=0 鈬?鍑哄脊寤舵椂**娌℃湁**杩涘叆琛ュ伩銆?
++      "鏂规鈶犱笅璇锋妸瀹冨苟杩?DSH_LEAD锛堣 DSH_LEAD={:.3f}锛夛紝鍚﹀垯杩欎竴娈电瓑浜庢病琛ャ€?,
++      fire_delay_report_s, fire_delay_report_s);
++    tools::logger()->info("{}", warn);
++    test_summary.add_startup(warn);
++  }
++
+   // 鍒濆鍖栧伐鍏风被
+   tools::Exiter exiter;
+   tools::Plotter plotter;  // 娉ㄦ剰plotter宸ュ叿鐨勪娇鐢?@@ -216,11 +364,41 @@ int main(int argc, char * argv[])
+   int arrive_ok_streak = 0;   // 杩炵画钀藉湪鍒颁綅闂ㄩ檺鍐呯殑甯ф暟锛堥槻鍗曞抚钂欐贩杩囧叧锛?   int last_fired_plate = -1;  // 涓婁竴鍙戞墦鐨勬槸鍝竴鍧楁澘锛坅rmor id锛?..3锛?   bool plate_armed = true;    // 杩欏潡鏉挎槸鍚﹀凡涓婅啗锛堟墦瀹岃鎽嗗嚭绐楀彛鍐嶅洖鏉ワ級
++  // 閫夋澘鍙樺寲鏃跺崟鐙涓€琛岋細涓寸晫甯︼紙涓ゅ潡 facing 鐩稿樊 卤5掳锛夊彧鏈夌害 0.15 s锛?+  // 鑰?[dbg] fire-gate 姣?48 甯ф墠鎵撲竴娆?鈥斺€?涓嶅崟鐙灏辨牴鏈湅涓嶈閫夋澘鍦ㄩ棯銆?+  int last_logged_aim_id = -1;
++  double last_logged_facing = 0.0;
++  // 涓婁竴甯х湡姝ｉ€変腑鐨勬澘锛堣法甯ц蹇嗭級銆? // 鍘熸潵 aim_id 姣忓抚閮借閲嶇疆鎴?target.last_id 鈬?`:399` 閭ｄ釜銆?掳 杩熸粸銆嶇殑姣旇緝鍩哄噯
++  // 姘歌繙鏄?last_id銆佷笉璺ㄥ抚 鈬?涓ゅ潡鏉?facing 鐩稿樊 卤5掳 鐨勭獎甯﹂噷锛岄€夋澘浼氳窡鐫€ last_id 闂€?+  // 澶嶆牳绋跨 5 鏉★細鎶?aim_id 鎻愬埌寰幆澶栵紝杩熸粸鎵嶆湁鎰忎箟銆?+  int aim_id_persist = -1;
++  // 闈欐闈跺垽瀹氱敤鐨勮法甯х姸鎬侊紙鍒ゆ嵁瑙佷笅闈?plate_armed 閭ｆ鐨勮鏄庯級
++  double last_facing_deg = 0.0;
++  int facing_still_frames = 0;
++  // 涓婁竴甯у彂鍑哄幓鐨?yaw锛堝懡浠ょ獊鍙樹繚鎶ょ敤锛屽畼鏂?shooter.cpp 鐨勭浜屼釜鏉′欢锛?+  float last_cmd_yaw = 0.0f;
++  bool has_last_cmd = false;
++  // 鐜板湪"涓轰粈涔堟墦涓嶅嚭"锛堝窘绔犲壇鏍囬鐢紱READY = 鍏跺畠鏉′欢閮芥弧瓒筹紝鍙樊鎸?F锛?+  std::string fire_state = "BOOT";
++  // 褰撳墠鐬勭殑閭ｅ潡鏉匡紙EKF 鍒楄〃閲岀殑 id锛夛紝缁?HUD 鍗曠嫭鎻忔鐢?+  int aimed_id = -1;
++  // 涓婁竴甯у紑鐏棬鏄惁鍏佽锛堢敤鏉ユ墦"鍏佽鈫旂鐏?鐨勭炕杞棩蹇楋級
++  bool prev_fire_allowed = false;
++  // 鐩爣/婊ゆ尝鍣ㄩ噸寤虹殑浠ｆ暟璁℃暟鍣細浣庝綅闈剁殑"楂樺害宸凡鏀舵暃"淇′换鍦ㄩ噸寤哄悗浣滃簾銆?+  // 鐢ㄨ鏁板櫒缁熶竴鍒ゅ簾锛堚槄4锛夛紝涓嶉潬鍦ㄤ笁澶勬暎鐫€娓呴浂锛屾紡涓€澶勫氨浼氬甫鐫€鏃т俊浠诲幓鍒ゆ柊闈躲€?+  int target_generation = 0;
++  int last_seen_generation = -1;
++  // 甯ч棿闅旓紙绉掞級锛氶潤姝㈤澏鍒ゆ嵁鎸?掳/s 缁欙紝闇€瑕佺湡瀹?dt锛堚槄7锛氶槇鍊间笉鑳芥槸"搴?甯?锛屽惁鍒欐崲甯х巼灏卞彉绱э級
++  std::chrono::steady_clock::time_point last_frame_time = std::chrono::steady_clock::now();
++  double frame_dt_s = 0.0;
+ 
+   const auto t_start = std::chrono::steady_clock::now();
+   while (!exiter.exit()) {
+     // Your code start
+ 
++    // 鍒锋柊 F 閿姸鎬侊細姣忓抚閮藉埛锛岃窡鏈夋病鏈夌洰鏍囨棤鍏筹紙娌℃湁鐩爣鏃朵汉鎸変簡 F 涔熻鑳借璁颁綇锛?+    fire_key_gate.poll();
++
+     camera.read(img, t);
+     if (img.empty()) {
+       continue;  // 鐩告満鍋跺皵缁欑┖甯э紝璺宠繃鏈疆锛屼笉鍙戦€佷换浣曟寚浠?@@ -248,6 +426,8 @@ int main(int argc, char * argv[])
+     auto armors = yolo.detect(img, frame_id);
+     const auto gimbal_state = gimbal.state();
+     const auto now = std::chrono::steady_clock::now();
++    frame_dt_s = tools::delta_time(now, last_frame_time);
++    last_frame_time = now;
+     // 绂荤嚎澶嶇幇鐢細杩欎竴甯х湅鍒扮殑鎵€鏈夋澘瀛愶紙棰滆壊銆佺紪鍙枫€佺疆淇″害銆佸洓涓鐐癸級
+     detlog.on_frame(frame_id, tools::delta_time(now, t_start), armors);
+ 
+@@ -336,6 +516,11 @@ int main(int argc, char * argv[])
+         target = auto_aim::Target(armor, t, 0.0, 0);
+         has_target = true;
+         frames_since_init = 0;
++        ++target_generation;  // 鎹簡鐩爣 鈬?楂樺害宸噸鏂颁粠 0 瀛﹁捣锛屼綆浣嶉澏淇′换浣滃簾
++        // 鎹簡鐩爣 鈬?閫夋澘鍜?鎵撹繃鍝潡"閮借娓呴浂锛氭柊鐩爣鐨?0 鍙锋澘涓嶆槸"鍒氭墦杩囩殑閭ｅ潡"
++        aim_id_persist = -1;
++        last_fired_plate = -1;
++        facing_still_frames = 0;
+       } else {
+         // 鍏堥娴嬪埌褰撳墠鏃跺埢锛屽啀鐢ㄨ娴嬩慨姝ｃ€?         // 瑙傛祴鐨?NIS 瓒呰繃闂ㄩ檺灏辨嫆鏀讹紝閬垮厤鍗曞抚璇叧鑱旀妸瑙掗€熷害鏇茬嚎鎷藉嚭灏栧嘲銆?@@ -357,21 +542,40 @@ int main(int argc, char * argv[])
+       if (has_detection) {
+         target = auto_aim::Target(*chosen, t, 0.0, 0);
+         frames_since_init = 0;
++        ++target_generation;  // 婊ゆ尝鍣ㄩ噸寤?鈬?楂樺害宸噸鏂颁粠 0 瀛﹁捣锛屼綆浣嶉澏淇′换浣滃簾
++        aim_id_persist = -1;      // 婊ゆ尝鍣ㄩ噸寤?鈬?閫夋澘涓?鎵撹繃鍝潡"閮戒綔搴?+        last_fired_plate = -1;
++        facing_still_frames = 0;
+       } else {
+         has_target = false;
++        aim_id_persist = -1;
++        last_fired_plate = -1;
++        facing_still_frames = 0;
+       }
+     }
+ 
+     if (!has_target) {
+       // 鐪熺殑娌℃湁鐩爣锛氫氦鍑烘帶鍒舵潈
+       gimbal.send(false, false, 0.0f, 0.0f);
++      fire_state = "NO TARGET";
++      {  // 姹囨€诲櫒锛氭棤鐩爣鐨勫抚涔熻璁℃暟锛堝惁鍒?鐪嬩笉瑙佺洰鏍?杩欎欢浜嬩笉浼氬嚭鐜板湪姹囨€婚噷锛?+        summary::Frame sf;
++        sf.has_target = false;
++        test_summary.update(sf);
++      }
+     } else {
+       const Eigen::VectorXd x = target.ekf_x();
+       // 璁板綍杩欐鎷熷悎鍑烘潵鐨勮閫熷害钀藉湪鍝釜杞€熸尅浣嶏紝渚涗笅涓€甯у垽鏂尅浣嶆槸鍚﹀垏鎹?       speed_band = (std::abs(x[7]) >= speed_band_split) ? 1 : 0;
+       const auto xyza_list = target.armor_xyza_list();
+-      int aim_id = target.last_id;
+-      if (aim_id < 0 || aim_id >= static_cast<int>(xyza_list.size())) aim_id = 0;
++      // aim_id 璺ㄥ抚淇濇寔锛氭瘮杈冨熀鍑嗗彉鎴愩€屼笂涓€甯х湡姝ｉ€変腑鐨勯偅鍧椼€嶏紝5掳 杩熸粸杩欐墠鎴愮珛銆?+      // 杩樻病閫夎繃銆佹垨鑰呬笂涓€甯ч偅鍧楀凡缁忚秺鐣岋紙鎹㈢洰鏍?鏉挎暟鍙樹簡锛夆噿 閫€鍥?EKF 鐨勫叧鑱旂粨鏋溿€?+      int aim_id = aim_id_persist;
++      if (aim_id < 0 || aim_id >= static_cast<int>(xyza_list.size())) {
++        aim_id = (target.last_id >= 0 && target.last_id < static_cast<int>(xyza_list.size()))
++                   ? target.last_id
++                   : 0;
++      }
+ 
+       // ---- 閫夈€屾渶姝ｅ闀滃ご銆嶇殑閭ｅ潡鏉?----
+       // EKF 鍏宠仈鍑烘潵鐨?last_id 鍙兘鏄垰杞繃鍘汇€侀┈涓婅绂诲紑瑙嗛噹鐨勯偅涓€鍧楋紙鍏宠仈鍙寜瑙掑害鏈€杩戯紝
+@@ -382,37 +586,108 @@ int main(int argc, char * argv[])
+       const auto facing_of = [&](const Eigen::Vector4d & p) {
+         return tools::limit_rad(p(3) + M_PI - center_bearing) * 57.29577951308232;
+       };
++      // ---- 瀹樻柟 sp_vision_25 鐨勫仛娉曪細閫夋澘瑕佸湪銆屽脊涓稿埌杈鹃偅涓€鍒汇€嶇殑鐢婚潰涓婇€?----
++      // 瀹樻柟 aimer.cpp锛氬厛 target.predict(future + fly_time)锛屽啀 choose_aim_point(棰勬祴鍚庣殑 target)锛?+      // 骞剁敤 coming_angle / leaving_angle 涓や釜瑙掗厤鍚?w 鐨勭鍙疯〃杈俱€岄€夋鍦ㄨ繘鍏ョ獥鍙ｇ殑閭ｅ潡銆嶃€?+      // 鐞嗙敱锛? rad/s銆侀琛?126 ms 鏃堕澏瀛愯浆杩?29掳锛屻€岀幇鍦ㄦ瀵广€嶇殑閭ｅ潡鍒板脊鐫€鏃跺凡缁忚浆璧?29掳锛?+      // 鑰屻€屽啀杩?126 ms 姝ｅソ姝ｅ銆嶇殑鏄殧澹侀偅鍧?鈬?鐜板湪姝ｅ 鈮?鍛戒腑鏃舵瀵广€?+      // 绛変环鍐欐硶锛氭澘鐨勫娉曠嚎璺熺潃闈跺瓙浠?w 杞紝鎵€浠?facing 涔熶互 w 鍙樺寲锛?+      // 銆屽埌杈炬椂鐨勬湞鍚戙€? 鐜板湪鐨勬湞鍚?+ w * t_arrive锛涢€?|鍒拌揪鏈濆悜| 鏈€灏忕殑閭ｅ潡銆?+      const double w_deg_per_s = x[7] * 57.29577951308232;
++      const double v_guess = (gimbal_state.bullet_speed > 5.0) ? gimbal_state.bullet_speed
++                                                               : default_bullet_speed;
++      const double dist_guess = xyza_list[aim_id].head(3).norm();
++      // 鍒拌揪鏃堕棿 = 鎬绘彁鍓?DSH_LEAD) + 椋炶(璺濈/寮归€?
++      // 涓夋锛堥摼璺?/ 鍑哄脊 / 椋炶锛夌己涓€涓嶅彲锛氱己鎬绘彁鍓?鈬?鍒拌揪鏈濆悜浣庝及 w脳鎬绘彁鍓嶏紱
++      // 缂洪琛?鈬?宸竴鏁村潡鏉匡紙4 rad/s銆?26 ms 鈬?29掳锛夈€?+      // 鏂规鈶狅細鍑哄脊寤舵椂宸茬粡骞惰繘 DSH_LEAD锛堟€绘彁鍓嶉噺锛夛紝杩欓噷涓嶅啀鍗曠嫭鍔犮€?+      const double t_arrive = dist_guess / std::max(1.0, v_guess) + lead_s;
++      const double face_offset_deg = aim_select_arrival ? w_deg_per_s * t_arrive : 0.0;
++      const auto facing_sel = [&](const Eigen::Vector4d & p) {
++        return facing_of(p) + face_offset_deg;  // 銆屽埌杈撅紙寮€鐏級鏃剁殑鏈濆悜銆嶏紝閫夋澘涓庨棬鎺ч兘鐢ㄥ畠
++      };
+       int best_id = aim_id;
+-      double best_facing = std::abs(facing_of(xyza_list[aim_id]));
++      double best_facing = std::abs(facing_sel(xyza_list[aim_id]));
+       // 绾﹀畾鑷锛欵KF 鍏宠仈鍑烘潵鐨勯偅鍧楁澘**涓€瀹氭槸鎴戜滑鑳界湅瑙佺殑閭ｅ潡**锛堟娴嬪埌浜嗘墠鏈夎娴嬶級锛?       // 鎵€浠ュ畠鐨?facing 蹇呯劧鎺ヨ繎 0銆傚鏋滆繖涓€椤归暱鏈熸槸 卤150掳 浠ヤ笂锛岃鏄?       // 銆宎 鏄湞澶栬繕鏄湪鏈濋噷銆嶈繖涓害瀹氬弽浜嗭紝鎶?facing_of 閲岀殑 `+ M_PI` 鍘绘帀鍗冲彲銆?-      const double assoc_facing_deg = best_facing;
++      const double assoc_facing_deg = std::abs(facing_of(xyza_list[aim_id]));
+       for (int i = 0; i < static_cast<int>(xyza_list.size()); ++i) {
+-        const double f = std::abs(facing_of(xyza_list[i]));
++        const double f = std::abs(facing_sel(xyza_list[i]));
+         if (f < best_facing) {
+           best_facing = f;
+           best_id = i;
+         }
+       }
+       // 鍙湁鏄庢樉鏇村ソ锛堝 5掳 浠ヤ笂锛夋墠鎹㈡澘锛岄伩鍏嶅湪涓寸晫瑙掍笂鏉ュ洖璺?-      if (best_id != aim_id && best_facing + 5.0 < std::abs(facing_of(xyza_list[aim_id]))) {
++      if (best_id != aim_id && best_facing + 5.0 < std::abs(facing_sel(xyza_list[aim_id]))) {
+         aim_id = best_id;
+       }
++      aim_id_persist = aim_id;  // 璺ㄥ抚璁板繂锛屼緵涓嬩竴甯у仛 5掳 杩熸粸姣旇緝
++      aimed_id = aim_id;        // 缁?HUD 鎻忔鐢紙鐪熸鐬勭殑鏄摢鍧楋級
+       const Eigen::Vector4d plate = xyza_list[aim_id];
+ 
+-      const double facing_deg = facing_of(plate);
+-      const bool facing_ok = std::abs(facing_deg) <= plate_facing_deg;
++      const double facing_deg = facing_of(plate);          // 鐜板湪鐨勬湞鍚?+      const double facing_arrive_deg = facing_sel(plate);  // 鍒拌揪锛堝紑鐏級鏃剁殑鏈濆悜
++      const bool facing_ok = std::abs(facing_arrive_deg) <= plate_facing_deg;
++
++      // 閫夋澘鍙樺寲鍗曠嫭璁颁竴琛岋紙瑙佷笂闈?last_logged_aim_id 鐨勮鏄庯級锛?+      // 杩欎竴琛屾槸銆屼汉鐪肩湅涓嶈銆佺郴缁熸棩蹇楁瘡 48 甯ф墠鎵撲竴娆°€嶇殑閭ｆ涓寸晫甯︾殑鍞竴璇佹嵁銆?+      bool plate_switched = false;
++      if (aim_id != last_logged_aim_id) {
++        plate_switched = true;
++        tools::logger()->info(
++          "[dbg] 閫夋澘鍙樺寲 aim_id {} -> {}锛坒acing {:.0f}掳 -> {:.0f}掳锛宎ssoc {:.0f}掳锛屽€欓€?{} 鍧楋級",
++          last_logged_aim_id, aim_id, last_logged_facing, facing_deg, assoc_facing_deg,
++          static_cast<int>(xyza_list.size()));
++        last_logged_aim_id = aim_id;
++        last_logged_facing = facing_deg;
++      }
+       // 涓€鍧楁澘鍙墦涓€鍙戯細鎹㈡澘銆佹垨鍚屼竴鍧楁澘鎽嗗嚭 rearm 瑙掞紝鎵嶉噸鏂颁笂鑶涖€?       // 娌℃湁杩欐潯锛岀▼搴忎細鍦ㄦ澘瀛愯浆璧扮殑鏁存鏃堕棿閲岃拷鐫€瀹冭繛鎵擄紝涓€涓插脊鍏ㄨ惤鍦ㄧ┖褰撻噷銆?       //
+       // 杩欓噷蹇呴』**姣忓抚鐜扮畻**锛屼笉鑳界敤銆岀疆浣嶄繚鎸併€嶇殑鍐欐硶锛屼繚鎸佺増鏈変袱涓礊锛?       //   鈶?闈欐闈朵笉杞紝姘歌繙鎽嗕笉鍑?rearm 瑙?鈬?鎵撳畬涓€鍙戝氨姘镐箙閿佹锛涜€岄浂浣嶆爣瀹氭濂借鐢ㄩ潤姝㈤澏杩炴墦 3 鍙戙€?       //   鈶?aim_id 浠?A 璺冲埌 B 鍐嶈烦鍥?A 鏃讹紝A 娌℃憜鍑鸿搴︿篃浼氬甫鐫€銆屽凡涓婅啗銆嶅洖鏉ャ€?-      const bool target_static = std::abs(x[7]) < 0.5;  // rad/s锛涗綆浜?0.5 灏卞綋闈跺瓙娌″湪杞?+      //
++      // 銆岄澏瀛愭槸涓嶆槸闈欐銆嶇殑鍒ゆ嵁锛堝鏍哥绗?4 鏉★級锛?+      //   鍘熸潵鐢?|x[7]| < 0.5锛圗KF 浼扮殑瑙掗€熷害锛夈€備絾 w 鍦?*璧锋鐖崌**鍜?*鍙嶅悜杩囬浂**鏃?+      //   閮戒細鎺夊埌寰堝皬 鈬?杩欐潯瑙勫垯鏁翠釜澶辨晥 鈬?5 Hz 瀵圭潃鍚屼竴鍧楁澘杩炴墦锛堢函鍝戠偖銆佺櫧鍚冮搴︼級銆?+      //   鏀规垚鐩存帴閲忋€屽綋鍓嶇瀯鐨勮繖鍧楁澘锛岃繖涓€甯х殑鏈濆悜鍙樹簡澶氬皯搴︺€嶏細
++      //     鏃嬭浆闈?3~9 rad/s 鈬?姣忓抚鍙?3.9~11.7掳锛岃鏁板櫒姣忓抚娓呴浂 鈬?姘歌繙鍒ゆ垚"鍦ㄨ浆"锛?+      //     闈欐闈?           鈬?姣忓抚鍙彉 0.03掳锛堥噺娴嬪櫔澹帮級锛岃鏁板櫒鑳芥敀璧锋潵銆?+      //   杩欐牱鍒ゆ嵁涓嶄緷璧?w 鐨勭鍙峰拰鏀舵暃杩囩▼锛寃 鍙嶅悜杩囬浂涔熶笉鍙楀奖鍝嶃€?+      // 娉ㄦ剰 facing_deg 鏄?*搴?*锛屼笉鑳芥嬁 tools::limit_rad 鍘诲寘锛堝畠鏄寜寮у害鍐欑殑 2蟺 鐜粫锛夛紝
++      // 杩欓噷鑷繁鎸?卤180掳 鐜粫銆?+      double d_facing_deg = facing_deg - last_facing_deg;
++      while (d_facing_deg > 180.0) d_facing_deg -= 360.0;
++      while (d_facing_deg < -180.0) d_facing_deg += 360.0;
++      d_facing_deg = std::abs(d_facing_deg);
++      last_facing_deg = facing_deg;
++      // 闃堝€兼寜銆屄?s銆嶇粰锛堜笌甯х巼鏃犲叧锛夛細榛樿 30 掳/s 鈮?60 fps 涓?0.5掳/甯с€?5 fps 涓?0.39 rad/s銆?+      // 鍐嶅彔鍔犮€岃繛缁?N 甯с€嶏紙DSH_STATIC_FRAMES锛岄粯璁?10锛夈€?+      const double d_facing_rate = (frame_dt_s > 1e-3) ? d_facing_deg / frame_dt_s : 0.0;
++      facing_still_frames = (d_facing_rate < static_rate_dps) ? facing_still_frames + 1 : 0;
++      const bool target_static = facing_still_frames >= static_frames_needed;
+       plate_armed = target_static || (aim_id != last_fired_plate) ||
+                     (std::abs(facing_deg) > plate_rearm_deg);
+-      const bool plate_ok = facing_ok && plate_armed;
++
++      // ---- 鍙墦浣庝綅闈讹紝涓嶆墦楂樹綅闈讹紙涓夋€侊紝瑙?src/low_plate.hpp锛?---
++      // 鍒ゅ畾鐢?EKF 棰勬祴鍑烘潵鐨勫洓鍧楁澘鐨勯珮搴﹀樊锛歾_max 鈭?z_min 灏辨槸 x[10]锛堢瀯楂樻澘鏃剁瓑浜?z_aim 鈭?z_min锛夈€?+      // warmup 妯″紡涓嬶紝杩欎釜宸€肩ǔ瀹氫繚鎸?DSH_LOW_PLATE_TRUST_S 绉?鈬?璁や负宸叉敹鏁?鈬?鏀惧紑楂樻澘锛?+      // 鎹㈢洰鏍?/ 婊ゆ尝鍣ㄩ噸寤?鈬?楂樺害宸噸鏂颁粠 0 瀛﹁捣 鈬?淇′换浣滃簾锛坓eneration 璁℃暟鍣ㄧ粺涓€鍒ゅ簾锛夈€?+      const bool rebuilt = (target_generation != last_seen_generation);
++      const bool low_ok = low_gate.allows_fire(
++        xyza_list, aim_id, has_detection, frame_dt_s, rebuilt);
++      last_seen_generation = target_generation;  // 閲嶅缓鍙湪绗竴娆¤"鐪嬭"鏃跺垽搴?+      const policy::LowPlate & low = low_gate.state();
++      if (low_gate.take_flip()) {
++        tools::logger()->info(
++          "[task2] 浣庝綅闈惰鍒欙細dz={:.2f} m 绋冲畾 {:.1f} s锛寈[10] 瑙嗕负宸叉敹鏁涳紝鏀惧紑楂樻澘",
++          low.z_spread, low_gate.trust_progress());
++      }
++
++      const bool plate_ok = facing_ok && plate_armed && low_ok;
+ 
+       // 寮归€燂細鐢垫帶涓嶅彲鐢ㄦ椂鐢ㄩ厤缃噷鐨勫厹搴曞€硷紝骞朵笖鍙憡璀︿竴娆?       double bullet_speed = gimbal_state.bullet_speed;
+@@ -430,10 +705,13 @@ int main(int argc, char * argv[])
+       // 鎻愬墠閲?+ 寮归亾瑙ｇ畻锛堥噸鍔涗笌绌烘皵闃诲姏閮藉湪 tools::Trajectory 閲岋級
+       float aim_yaw = 0.0f;
+       float aim_pitch = 0.0f;
+-      task_common::calc_aim(x, plate, bullet_speed, muzzle_offset_x, aim_yaw, aim_pitch);
++      // 鏂规鈶狅細t_extra 浼?0 鈥斺€?鍏ㄩ儴"闈為琛?鎻愬墠閲忛兘璧?DSH_LEAD锛堟€绘彁鍓嶉噺锛夎繖涓€涓棆閽紝
++      // 閬垮厤"鍚屼竴娈靛欢杩熷湪涓ゅ鍚勮ˉ涓€娆?銆俢alc_aim 鐨?t_extra 鍙傛暟淇濈暀鐫€锛屽皢鏉ヨ嫢瑕佹妸鏌愭
++      // 寤舵椂鎸?缁曟棆杞腑蹇冩棆杞?鐨勬柟寮忓崟鐙鐞嗗啀鐢ㄥ畠銆?+      task_common::calc_aim(x, plate, bullet_speed, muzzle_offset_x, aim_yaw, aim_pitch, 0.0);
+       // 鍏夎酱琛ュ伩锛氭妸鐬勫噯绾挎幇鍥炵偖鍙ｅ疄闄呮寚鍚戯紙姝?yaw = 寰€宸︼紝姝?pitch = 寰€涓婏級
+       // 鍔ㄦ€佹粸鍚庤ˉ鍋匡細鐩告満鏇濆厜+鍙栨祦+瑙ｇ畻+涓插彛鐨勫浐瀹氭粸鍚庯紙绉掞級锛屾寜瑙掗€熷害琛ワ紱DSH_LEAD 鍙皟
+-      static const double lead_s = []() { const char * v = std::getenv("DSH_LEAD"); return v ? std::atof(v) : 0.0; }();
++      // 锛坙ead_s 鐨勫０鏄庡凡鎻愬墠鍒板弬鏁板尯锛屽洜涓哄埌杈炬椂鍒?t_arrive 涔熻鐢ㄥ畠锛?       // 寤惰繜琛ュ伩鐢ㄣ€屾澘鍦ㄧ浉鏈洪噷鐪嬪埌鐨勮閫熷害銆嶏紝涓嶆槸鐩爣鑷浆瑙掗€熷害 鈥斺€?涓よ€呭樊 d/r 鈮?16 鍊嶏紝鑰屼笖
+       // **绗﹀彿鏄弽鐨?*锛氳繎渚ф澘寰€鍙宠蛋锛堣鍦?yaw 鍙樺皬锛夊搴旂殑鏄?蠅 > 0锛岀洿鎺ヤ箻 蠅 浼氭妸鍑嗘槦寰€宸︽帹銆?       // 鏉跨殑閫熷害 v = 蠅 岷?脳 (plate 鈭?center)锛岀浉鏈鸿閫熷害 d(yaw)/dt = (x路vy 鈭?y路vx)/h虏銆?@@ -468,6 +746,10 @@ int main(int argc, char * argv[])
+         (max_rounds_per_stage <= 0) || (rounds_this_stage < max_rounds_per_stage);
+       const bool mode_ok = !require_auto_aim_mode || gimbal.mode() == io::GimbalMode::AUTO_AIM;
+ 
++      // ---- 浜烘寜浣?F 鎵嶅厑璁稿紑鐏紙浜哄伐纭寮€鐏級----
++      // 杩欎竴鏉″彧鎸°€屼粈涔堟椂鍊欐墸鎵虫満銆嶏紝涓嶆尅璺熻釜锛氫簯鍙扮収鏃т竴鐩村湪璺燂紝浜轰笉鎸夊氨涓嶅彂銆?+      const bool key_ok = !fire_key_enabled || fire_key_gate.allowed();
++
+       // ---- 浜戝彴鍒颁綅鍒ゅ畾 ----
+       // 宸€兼寜 卤180掳 灞曞紑锛屽彧鐪?yaw锛坓imbal.cpp:106 閲?yaw 鍚屽彿锛屽彲姣旓級銆?       double dyaw = static_cast<double>(aim_yaw) - static_cast<double>(gimbal_state.yaw);
+@@ -475,6 +757,22 @@ int main(int argc, char * argv[])
+       while (dyaw < -M_PI) dyaw += 2.0 * M_PI;
+       const double yaw_err_deg = std::abs(dyaw) * 57.29577951308232;
+ 
++      // 鍒颁綅瀹归檺鍙互鎸夈€岀嚎鎬ц窛绂汇€嶇粰锛堝畼鏂?sp_vision_25 鐨?shooter 鍙傛暟锛夛細
++      //   first_tolerance 3掳锛?2 m锛?/ second_tolerance 2掳锛?2 m锛?+      // 鎹㈢畻鎴愮背锛?掳脳2 m 鈮?105 mm銆?掳脳3 m 鈮?105 mm 鈬?瀹樻柟鐢ㄧ殑鏄?*鎭掑畾鐨勭嚎鎬у宸?*銆?+      // 鏈伐绋嬪師鏉ュ浐瀹?0.8掳锛屽湪 3.15 m 澶勫彧鏈?44 mm锛屾瘮瀹樻柟涓?2.4 鍊?+      // 鈬?杩欏氨鏄€岄棬闄愭案杩滄墦涓嶅紑銆嶆渶鍙兘鐨勫師鍥犮€侱SH_ARRIVE_MM > 0 鏃舵寜璺濈鎹㈢畻銆?+      const double arrive_tol_deg_eff = (arrive_mm > 0.0 && dist_guess > 0.3)
++                                         ? arrive_mm * 0.001 / dist_guess * 57.29577951308232
++                                         : arrive_tol_deg;
++
++      // 鍛戒护绐佸彉淇濇姢锛堝畼鏂?shooter.cpp 鐨勭浜屼釜鏉′欢锛夛細
++      // 鏂板懡浠ゅ拰涓婁竴甯у樊澶鏃惰繖涓€鏋笉鎵撯€斺€旀鏃剁偖绠¤繕鍦ㄨ€佷綅缃紝鑰屼笅涓€甯х殑鍛戒护鎵嶆槸瀵圭殑銆?+      const double cmd_jump_deg =
++        has_last_cmd ? std::abs(static_cast<double>(aim_yaw) - last_cmd_yaw) * 57.29577951308232
++                     : 0.0;
++      const bool cmd_stable = cmd_jump_deg < 2.0 * arrive_tol_deg_eff;
++
+       // pitch 鐢ㄣ€岀浉鍔犮€嶏細鍙戞寚浠ゆ椂 gimbal.cpp:111 鍙栦簡鍙嶏紝鍥炰紶 gimbal.cpp:272 娌＄炕鍥炴潵锛?       // 鎵€浠ュ埌浣嶆椂 aim_pitch + fb_pitch 鈮?0銆傚啓鎴愬噺娉曞氨浼氬緱鍒颁竴涓亽绛変簬 2脳pitch 鐨勫亣璇樊锛?       // 闂ㄦ帶浼氫竴鐩存尅鈥斺€旇繖涔熸槸绗竴娆′笂杞﹁鐪?[task2] 閭ｈ cmd/fb 鐨勫師鍥犮€?@@ -497,7 +795,7 @@ int main(int argc, char * argv[])
+       // 瑕佹眰杩炵画 N 甯ч兘鍦ㄩ棬闄愬唴锛氫簯鍙版壂杩?0.5掳 鐨勯偅涓€鐬棿涔熶細銆岀湅璧锋潵鍒颁綅銆嶏紝
+       // 鍙崱鍗曞抚绛変簬娌″崱锛岃繖涓€鏉″氨鏄槻杩欎釜鐨勩€?       const bool arrive_in_tol =
+-        yaw_err_deg < arrive_tol_deg && pitch_err_deg < arrive_tol_pitch_deg;
++        yaw_err_deg < arrive_tol_deg_eff && pitch_err_deg < arrive_tol_pitch_deg && cmd_stable;
+       arrive_ok_streak = (arrive_in_tol && !arrive_tripped) ? arrive_ok_streak + 1 : 0;
+       const bool arrive_ok =
+         !arrive_on || (arrive_in_tol && arrive_ok_streak >= arrive_frames_needed);
+@@ -510,10 +808,11 @@ int main(int argc, char * argv[])
+       if (frame_count % 48 == 0)
+       {
+         tools::logger()->info(
+-          "[dbg] fire-gate stable={} conv={} frames={}/{} nis={:.2f}/{:.2f} interval={} rounds={} mode={} hold={} plate={}({:.0f}掳) assoc={:.0f}掳 | mode_now={} bullet_alive={} rounds {}/{}",
+-          stable, target.is_converged(), frames_since_init, min_frames_for_fire,
++          "[dbg] fire-gate aim_id={} stable={} conv={} frames={}/{} nis={:.2f}/{:.2f} interval={} rounds={} mode={} hold={} plate={}({:.0f}掳鈫掑埌杈緖:.0f}掳) low={}(dz={:.2f}m 浣巤}鍏眥}鍧? key={} t_arr={:.0f}ms assoc={:.0f}掳 | mode_now={} bullet_alive={} rounds {}/{}",
++          aim_id, stable, target.is_converged(), frames_since_init, min_frames_for_fire,
+           nis_failure_rate, max_nis_failure_rate, interval_ok, rounds_ok, mode_ok, holding,
+-          plate_ok, facing_deg, assoc_facing_deg, static_cast<int>(gimbal.mode()),
++          plate_ok, facing_deg, facing_arrive_deg, low.aim_is_low, low.dz, low.low_count, low.total,
++          key_ok, t_arrive * 1000.0, assoc_facing_deg, static_cast<int>(gimbal.mode()),
+           bullet_count_alive, rounds_this_stage, max_rounds_per_stage);
+         // 鍒颁綅闂ㄦ帶鐨勮嚜妫€琛岋細err/绐楀彛/blocked/tripped 灏辨槸銆岃繖涓弬鏁版湁娌℃湁闂銆嶇殑璇佹嵁銆?         //   路 闈欐闈朵笂 err 闀挎湡 > 闂ㄩ檺  鈫?闂ㄩ檺澶揣鎴栭浂浣嶅亸浜?@@ -522,18 +821,65 @@ int main(int argc, char * argv[])
+         //   路 鏈熬鐨?fb/cmd 鏄鍙峰垽鎹細鍒颁綅鏃?fb yaw 鈮?cmd yaw銆乫b pitch 鈮?鈭抍md pitch銆?         //     鑻?fb pitch 鈮?+cmd pitch锛岃鏄庢垜杩欐潯 pitch 鐩稿姞鐨勭害瀹氶敊浜嗭紝鏀逛竴琛屽嵆鍙€?         tools::logger()->info(
+-          "[dbg] arrive={} tol={:.2f}/{:.2f}掳 errY={:.2f}掳 errP={:.2f}掳 Ymin/max={:.2f}/{:.2f} n={} "
+-          "blocked={} tripped={} | fb yaw={:.2f} pitch={:.2f} cmd yaw={:.2f} pitch={:.2f}",
+-          arrive_on, arrive_tol_deg, arrive_tol_pitch_deg, yaw_err_deg, pitch_err_deg,
+-          arrive_err_min, arrive_err_max, arrive_err_frames, arrive_blocked_shots, arrive_tripped,
+-          gimbal_state.yaw, gimbal_state.pitch, aim_yaw, aim_pitch);
++          "[dbg] arrive={} tol={:.2f}/{:.2f}掳(eff {:.2f}掳) errY={:.2f}掳 errP={:.2f}掳 Ymin/max={:.2f}/{:.2f} n={} "
++          "blocked={} tripped={} jump={:.2f}掳 | fb yaw={:.2f} pitch={:.2f} cmd yaw={:.2f} pitch={:.2f}",
++          arrive_on, arrive_tol_deg, arrive_tol_pitch_deg, arrive_tol_deg_eff, yaw_err_deg,
++          pitch_err_deg, arrive_err_min, arrive_err_max, arrive_err_frames, arrive_blocked_shots,
++          arrive_tripped, cmd_jump_deg, gimbal_state.yaw, gimbal_state.pitch, aim_yaw, aim_pitch);
+         arrive_err_seen = false;  // 涓嬩竴琛岄噸鏂扮粺璁★紝姣忚瑕嗙洊绾?0.8 绉?         arrive_err_frames = 0;
+       }
+       const bool would_fire =
+-        has_detection && stable && interval_ok && rounds_ok && mode_ok && !holding && plate_ok;
++        has_detection && stable && interval_ok && rounds_ok && mode_ok && !holding && plate_ok &&
++        key_ok;
+       const bool fire = would_fire && arrive_ok && !latency.step_enabled();  // 闃惰穬娴嬭瘯鏈熼棿涓€寰嬩笉鏀惧脊
+ 
++      // ---- 寰界珷鍓爣棰橈細鐜板湪涓轰粈涔堟墦涓嶅嚭锛圧EADY = 鍏跺畠鏉′欢閮芥弧瓒筹紝鍙樊鎸?F锛?---
++      if (fire) {
++        fire_state = "FIRE";
++      } else if (!has_detection) {
++        fire_state = "NO TARGET";
++      } else if (!mode_ok) {
++        fire_state = "WAIT gear (need AUTO_AIM)";
++      } else if (!key_ok) {
++        fire_state = "WAIT F key";
++      } else if (!stable) {
++        fire_state = "WAIT ekf (frames/nis)";
++      } else if (!plate_ok) {
++        fire_state = "WAIT plate (facing/armed/low)";
++      } else if (!arrive_ok) {
++        fire_state = "WAIT gimbal arrive";
++      } else if (!interval_ok) {
++        fire_state = "WAIT interval";
++      } else {
++        fire_state = "READY";
++      }
++
++      // ---- 姹囨€诲櫒锛氭妸杩欎竴甯х殑鍒ゆ嵁鐘舵€佸杺杩涘幓锛堥€€鍑烘椂缁熶竴杈撳嚭 A/B/C 涓夌粍锛?---
++      {
++        summary::Frame sf;
++        sf.has_target = true;
++        sf.has_detection = has_detection;
++        sf.yaw_err_deg = yaw_err_deg;
++        sf.arrive_ok = arrive_ok;
++        sf.plate_ok = plate_ok;
++        sf.key_ok = key_ok;
++        sf.mode_ok = mode_ok;
++        sf.stable = stable;
++        sf.would_fire = would_fire;
++        sf.fire = fire;
++        sf.dz = low.dz;
++        sf.z_spread = low.z_spread;
++        sf.trust = low_gate.trust_progress();
++        sf.w = x[7];
++        sf.t_arrive_ms = t_arrive * 1000.0;
++        sf.aim_id = aim_id;
++        sf.gear = static_cast<int>(gimbal.mode());
++        sf.rounds = rounds_this_stage;
++        sf.plate_switch = plate_switched;
++        test_summary.update(sf);
++      }
++
+       // 鐪嬮棬鐙楋細鍙湁銆屾湰鏉ョ湡浼氭墦鍑哄幓鐨勯偅涓€鍙戣鎸′簡銆嶆墠绠楁崯澶憋紝鎵嶈鏁?       if (arrive_on && !arrive_ok && would_fire) {
+         arrive_blocked_shots++;
+@@ -560,6 +906,9 @@ int main(int argc, char * argv[])
+ 
+       // 缁濆瑙掑害鎺у埗锛沵ode_ok 涓哄亣鏃朵氦鍑烘帶鍒舵潈锛岄伩鍏嶅拰浜烘墜鎿嶄綔鎶簯鍙?       gimbal.send(mode_ok, fire, aim_yaw, aim_pitch, task_common::to_target_id(target.name));
++      // 璁颁笅杩欎竴甯у彂鍑哄幓鐨勮搴︼紙涓嬩竴甯х敤鏉ョ湅鍛戒护鏈夋病鏈夌獊鍙橈級
++      last_cmd_yaw = aim_yaw;
++      has_last_cmd = true;
+       // 娴嬮噺锛氫覆鍙ｅ啓瀹岀殑鏃跺埢 + 鎴戜滑鍙戠殑瑙?+ 鐢垫帶杩欎竴甯ф姤鍥炴潵鐨勫Э鎬侊紙fb 鏄數鎺у潗鏍囩郴锛?       // 娉ㄦ剰 gimbal.send 閲?pitch 鍙栬繃鍙嶏紝姣斿鏃朵袱杈硅缁熶竴绗﹀彿锛?       latency.on_send(
+@@ -577,6 +926,17 @@ int main(int argc, char * argv[])
+           aim_yaw, aim_pitch, plate.head(3).norm(), x[7], rounds_this_stage,
+           max_rounds_per_stage),
+         cv::Point(10, 70), cv::Scalar(0, 255, 255), 1.0, 2);
++      // 鏂板绛栫暐鐨勭姸鎬佹潯锛堢洰鏍囩浉鍏抽儴鍒嗭級锛氫竴鐪肩湅鍑恒€岀幇鍦ㄤ负浠€涔堜笉鍙戙€嶁€斺€旀槸鐬勫埌楂樻澘浜嗭紵
++      // 灞忓箷鏂囧瓧涓€寰?ASCII锛坈v::putText 涓嶆敮鎸佷腑鏂囷級
++      tools::draw_text(
++        img,
++        fmt::format(
++        "plate={} dz={:.2f}m trust={:.1f}/{:.1f}s  tgt_id={}{} facing={:.0f}->{:.0f}deg  "
++        "t_arr={:.0f}ms",
++        low.aim_is_low ? "LOW" : "HIGH", low.dz, low_gate.trust_progress(),
++        low_gate.trust_need(), aim_id, (aim_id == target.last_id ? "" : "(pred)"), facing_deg,
++        facing_arrive_deg, t_arrive * 1000.0),
++        cv::Point(10, 120), cv::Scalar(0, 255, 255), 0.6, 1);
+ 
+       // ---- 鍙戠粰 PlotJuggler 鐨勬洸绾?----
+       // task2_aim锛氬彂缁欎簯鍙扮殑鎺у埗鍛戒护锛泃ask2_ekf锛欵KF 鎷熷悎鍑烘潵鐨勮閫熷害涓庡仴搴峰害銆?@@ -604,14 +964,72 @@ int main(int argc, char * argv[])
+     // 绐楀彛鐘舵€佹潯锛氭斁鍦ㄦ墍鏈夊垎鏀箣澶栵紝娌＄洰鏍囨椂涔熻鐢伙紝鍚﹀垯鐪嬩笉鍑虹▼搴忚繕娲荤潃
+     hud.draw(img, armors, chosen, frame_id, has_target, holding);
+ 
++    // ---- 鐪熸琚瀯鐨勯偅鍧楁澘锛屽崟鐙敤鍙︿竴绉嶉鑹叉弿鍑烘潵锛?026-10-21 涓夊绗?11 鏉★級----
++    // HUD 鐨勭豢妗嗙敾鐨勬槸**妫€娴嬪眰** chosen锛堢鐢婚潰涓績鏈€杩戠殑閭ｅ潡锛夛紝
++    // 鑰岀湡姝ｈ鐬勭殑鏄?EKF 鍒楄〃閲岀殑 aim_id 鈥斺€?涓よ€呭彲鑳戒笉鏄悓涓€鍧楋紙鐬勭殑鏄?杩樻病杞繘瑙嗛噹"鐨勯偅鍧楋級銆?+    // aim_id == last_id 鏃讹紝琚瀯鐨勫氨鏄?chosen 鏈韩 鈬?鐩存帴鎶婂畠楂樹寒锛?+    // 涓嶇浉绛夋椂璇存槑鐬勭殑鏄娴嬪嚭鏉ョ殑鏉匡紝鐢婚潰涓婄湅涓嶈 鈬?鐘舵€佽浼氭爣 (pred)銆?+    if (has_detection && chosen != nullptr && aimed_id >= 0 && aimed_id == target.last_id) {
++      tools::draw_points(img, chosen->points, {255, 255, 255}, 2);
++    }
++
++    // ---- 寮€鐏棬鐘舵€佽 + 寰界珷锛堟斁鍦ㄥ垎鏀锛氭病鐩爣鏃舵渶闇€瑕佺煡閬撳紑鐏棬鐘舵€侊級----
++    {
++      const std::string m = fire_key_gate.mode_text();
++      const bool is_toggle = m.rfind("toggle", 0) == 0;
++      std::string f_txt;
++      if (!fire_key_enabled) {
++        f_txt = "GATE=OFF (auto fire, no F needed)";
++      } else {
++        const std::string k = is_toggle ? (fire_key_gate.latched() ? "LOCKED" : "UNLOCKED")
++                                        : (fire_key_gate.pressed() ? "DOWN" : "UP");
++        f_txt = fmt::format("GATE=ON ({}, F={})", m, k);
++      }
++      tools::draw_text(img, f_txt, cv::Point(10, 95), cv::Scalar(0, 255, 255), 0.6, 1);
++      draw_fire_badge(
++        img, fire_key_enabled, fire_key_gate.allowed(), fire_key_gate.degraded(),
++        fire_key_gate.backend_name(), fire_state);
++    }
++
++    // 杈规部鏃ュ織锛坒orensic锛夛細鎸夐敭鐘舵€佷竴鍙樺氨鎵撲竴琛屻€備簨鍚庡鏃ュ織/褰曞儚鏃跺簭銆?+    // 浠ュ強"鍒板簳鎸夋病鎸?鐨勪簤璁紝闈犺繖涓€琛岃鍐筹紙姣?60 fps 鐨勭敾闈㈠彲闈狅級銆?+    if (fire_key_gate.take_edge()) {
++      tools::logger()->info(
++        "[task2] 寮€鐏棬鎸夐敭杈规部锛歿}锛堝悗绔?{}锛岀 {} 甯э紝pressed={}锛?,
++        fire_key_gate.pressed() ? "鎸変笅" : "鏉惧紑", fire_key_gate.backend_name(), frame_id,
++        fire_key_gate.pressed());
++    }
++    {
++      const bool f_now = fire_key_enabled && fire_key_gate.allowed();
++      if (f_now != prev_fire_allowed) {
++        tools::logger()->info(
++          "[task2] 寮€鐏棬 {}锛坽}锛岀 {} 甯э級", f_now ? "绂佺伀鈫掑厑璁稿紑鐏? : "鍏佽寮€鐏啋绂佺伀",
++          fire_key_gate.backend_name(), frame_id);
++        prev_fire_allowed = f_now;
++      }
++    }
++
+     cv::imshow("task2", img);
+-    if (cv::waitKey(1) == 'q') {
++    const int key_code = cv::waitKey(1);
++    if (key_code == 'q') {
+       break;
+     }
++    // 鎸?s 闅忔椂鎶婂綋鍓嶆眹鎬绘墦鍑烘潵锛堜笉鐢ㄩ€€鍑轰篃鑳界湅杩欎竴鍦虹殑涓棿鐘舵€侊級
++    if (key_code == 's' || key_code == 'S') {
++      tools::logger()->info("[task2] 锛堟墜鍔ㄨЕ鍙戞眹鎬伙級");
++      test_summary.print();
++    }
++    // F 閿殑鍏滃簳閫氶亾锛氬彧鏈夊湪鏃㈡病鏈?evdev銆佸張涓嶆槸缁堢鐨勬椂鍊欐墠璧蜂綔鐢?+    if (fire_key_gate.uses_window_fallback()) fire_key_gate.feed(key_code);
+ 
+     // Your code end
+   }
+ 
++  // 娴嬭瘯姹囨€伙細閫€鍑烘椂锛堟寜 q 鎴?Ctrl+C锛夌粺涓€杈撳嚭 A/B/C 涓夌粍鐨勫叧閿暟鍊笺€?+  // 鐩殑锛氳繖浜涙暟鏁ｈ惤鍦ㄥ惎鍔ㄦ棩蹇椼€乤rrive/fire-gate 琛屻€乴at CSV 閲岋紝鍑犵櫨琛屾棩蹇楃炕鐫€鎵惧緢瀹规槗婕忛」銆?+  // DSH_SUMMARY_FILE 璁句簡鐨勮瘽锛屾眹鎬昏繕浼氬彟瀛樹竴浠界嫭绔嬫枃浠讹紙涓嶄緷璧?tee 鎹曡幏锛夈€?+  test_summary.print();
++
+   // 閫€鍑哄墠涓诲姩浜ゅ嚭鎺у埗鏉?   gimbal.send(false, false, 0.0f, 0.0f);
+   return 0;
+
+### ===== src\task_3.cpp =====
+diff --git "a/D:\\DSH\\fp_aim\\src\\task_3.cpp" "b/D:\\MTG\\Documents\\OC\\fp_aim_fkey\\src\\task_3.cpp"
+index 803047f..c565e85 100644
+--- a/src\task_3.cpp
++++ b/src\task_3.cpp
+@@ -10,6 +10,8 @@
+ #include "io/camera.hpp"
+ #include "io/gimbal/gimbal.hpp"
+ #include "src/detect_log.hpp"
++#include "src/env_util.hpp"
++#include "src/fire_key.hpp"
+ #include "src/overlay.hpp"
+ #include "src/task_common.hpp"
+ #include "tasks/auto_aim/solver.hpp"
+@@ -62,6 +64,41 @@ int main(int argc, char * argv[])
+   const double outpost_z_window = tools::read_or<double>(cfg, "outpost_z_window", 0.30);
+   const double outpost_top_margin = tools::read_or<double>(cfg, "outpost_top_margin", 0.12);
+ 
++  // ================= 鏂板绛栫暐锛堜换鍔′笁榛樿鍏ㄩ儴鍏抽棴锛岃涓轰笌鍘熺増涓€鑷达級=================
++  // 1) 浜哄伐寮€鐏棬锛氫换鍔′笁瑕?12 璧吂杩炴墦 30 绉掋€?5 鍙戝懡涓紝浜烘寜涓嶄綇锛屾墍浠ラ粯璁ゅ叧銆?+  //    闇€瑕?鎵嬪姩纭"璋冭瘯鏃剁敤 DSH_FIRE_KEY_ENABLE=1 鎵撳紑銆?+  const bool fire_key_enabled = policy::env_bool("DSH_FIRE_KEY_ENABLE", false);
++  fire_key::Gate fire_key_gate;
++  // 2) 鍑哄脊寤舵椂锛堟懇鎿﹁疆浠庢帴鍒版寚浠ゅ埌瀛愬脊鍑鸿啗锛夛細**鍙綔璁板綍**锛屼笉鍐嶅崟鐙疮鍔犮€?+  //    瀹樻柟 sp_vision_25 鍦?aimer.cpp 鐨勬敞閲婇噷鍐欑殑鏄€宒etector-aimer 0.005 + 鍙戝脊寤舵椂 0.1銆嶃€?+  //    鏂规鈶狅紙涓?task_2 涓€鑷达級锛氭墍鏈?闈為琛?鐨勬彁鍓嶉噺閮芥斁杩?DSH_LEAD锛堟€绘彁鍓嶉噺锛夛紝
++  //    DSH_FIRE_DELAY 鍙敤鏉ュ湪鎶ュ憡閲岃"鍏朵腑鍑哄脊绾﹀灏? 鈬?涓嶄細鎶婂悓涓€娈靛欢杩熻ˉ涓ら亶銆?+  const double fire_delay_report_s = policy::env_double("DSH_FIRE_DELAY", 0.0);
++  // 3) 鎬绘彁鍓嶉噺 DSH_LEAD锛堥摼璺?+ 浜戝彴婊炲悗 + 鍑哄脊寤舵椂锛夆€斺€?*鍞竴鐨勫姛鑳芥棆閽?*銆?+  //    鍓嶅摠绔?2.5 rad/s銆乺=0.2765 m銆? m锛氳鍦ㄨ閫熷害 鈮?12.6 掳/s 鈬?缂?57 ms 灏辨槸 0.72掳锛?+  //    绾?0.6 涓澘鍗婂锛?29 mm 鏉垮崐寮犺 1.23掳锛夆噿 涓嶈ˉ灏辨槸绯荤粺鎬у亸銆?+  //    娉ㄦ剰锛歴tatic 鍙湪杩涚▼鍚姩鏃惰涓€娆?鈬?鏀硅繖涓幆澧冨彉閲忓繀椤婚噸鍚繘绋嬨€?+  static const double lead_s = []() { const char * v = std::getenv("DSH_LEAD"); return v ? std::atof(v) : 0.0; }();
++  // 2) 浣庝綅闈惰鍒欏湪浠诲姟涓?*宸叉憳闄?*锛?026-10-21 璇勫淇 6锛夛細
++  //    鍓嶅摠绔欐病鏈変綆浣嶉澏鐨勯€傚簲鐥団€斺€斾笁鍧椾腑閮ㄦ澘鍏ㄦ槸鍚堟硶鐩爣锛岄《閮ㄩ偅鍧?楂樹綅闈?
++  //    宸茬粡鏈?outpost_z_window / outpost_top_margin 涓ら亾杩囨护锛涜€屼笖涓儴鏉跨殑闃舵楂樺害
++  //    鏄浘绾稿畾鍊笺€丒KF 鍏ㄧ▼鍐荤粨锛屼笉瀛樺湪 x[10] 鏀舵暃闂銆?+  //    鏇村叧閿細鑻ユ部鐢?task_2 鐨?DSH_LOW_PLATE_Z_TOL=0.10锛屼細鎶?+0.2 m 鍙伴樁閭ｅ潡鏉挎嫤鎺?+  //    鈥斺€?2 Hz 鎷艰閲忕殑浠诲姟琚嫤 = 鐩存帴鎺夎閲忓垎銆傚皯涓€涓棬灏戜竴涓浄銆?+  tools::logger()->info(
++    "[task3] 浜哄伐寮€鐏棬 = {}锛堟ā寮?{}锛屾寜閿悗绔?{}锛夛綔鍑哄脊寤舵椂锛堣褰曞€硷紝涓嶅崟鐙疮鍔狅級= {:.3f} s",
++    fire_key_enabled ? "寮€" : "鍏?, fire_key_gate.mode_text(), fire_key_gate.backend_name(),
++    fire_delay_report_s);
++  tools::logger()->info(
++    "[task3] 棰勬祴鏃跺煙 = 鎬绘彁鍓?{:.3f}s锛堝叾涓嚭寮瑰欢鏃剁害 {:.3f}s锛屼粎璁板綍涓嶅崟鐙疮鍔狅級+ 椋炶锛堝脊閬撹В绠楀唴閮級",
++    lead_s, fire_delay_report_s);
++  if (fire_delay_report_s > 0.0 && lead_s <= 0.0) {
++    tools::logger()->warn(
++      "[task3] 鈿?DSH_FIRE_DELAY={:.3f}s 宸茶锛屼絾 DSH_LEAD=0 鈬?鍑哄脊寤舵椂**娌℃湁**杩涘叆琛ュ伩銆?
++      "鏂规鈶犱笅璇锋妸瀹冨苟杩?DSH_LEAD锛堣 DSH_LEAD={:.3f}锛夛紝鍚﹀垯杩欎竴娈电瓑浜庢病琛ャ€?,
++      fire_delay_report_s, fire_delay_report_s);
++  }
++
+   // 鍒濆鍖栧伐鍏风被
+   tools::Exiter exiter;
+   tools::Plotter plotter;  // 娉ㄦ剰plotter宸ュ叿鐨勪娇鐢?@@ -101,6 +138,9 @@ int main(int argc, char * argv[])
+   while (!exiter.exit()) {
+     // Your code start
+ 
++    // 鍒锋柊 F 閿姸鎬侊細姣忓抚閮藉埛锛岃窡鏈夋病鏈夌洰鏍囨棤鍏?+    fire_key_gate.poll();
++
+     camera.read(img, t);
+     if (img.empty()) {
+       continue;  // 鐩告満鍋跺皵缁欑┖甯э紝璺宠繃鏈疆锛屼笉鍙戦€佷换浣曟寚浠?@@ -258,7 +298,25 @@ int main(int argc, char * argv[])
+       // 宸茬粡鎺ヨ繎涓€鍧?129 姣背瑁呯敳鏉垮紶瑙掞紙绾?2.46 搴︼級鐨勪竴鍗婏紝鎵€浠ュ脊閬撹В绠楁槸蹇呴』鐨勩€?       float aim_yaw = 0.0f;
+       float aim_pitch = 0.0f;
+-      task_common::calc_aim(x, plate, bullet_speed, muzzle_offset_x, aim_yaw, aim_pitch);
++      // 鏂规鈶狅細t_extra 浼?0 鈥斺€?鎵€鏈?闈為琛?鎻愬墠閲忛兘璧?DSH_LEAD锛堟€绘彁鍓嶉噺锛夎繖涓€涓棆閽紝
++      // 閬垮厤"鍚屼竴娈靛欢杩熷湪涓ゅ鍚勮ˉ涓€娆?锛堣ˉ杩囧ご 0.83掳锛岃繕浼氳浜鸿鍒ゆ垚绗﹀彿鍙嶄簡锛夈€?+      task_common::calc_aim(
++        x, plate, bullet_speed, muzzle_offset_x, aim_yaw, aim_pitch, 0.0);
++
++      // 寤惰繜琛ュ伩锛氭寜銆屾澘鍦ㄧ浉鏈洪噷鐨勮鍦ㄨ閫熷害銆嶈ˉ锛堜笌 task_2 鍚屼竴濂楀叕寮忋€佸悓涓€濂楃鍙风害瀹氾級銆?+      // 鍓嶅摠绔?2.5 rad/s銆乺=0.2765 m銆? m 鈬?瑙嗗湪瑙掗€熷害 鈮?12.6 掳/s锛?+      // 缂?57 ms 灏辨槸 0.72掳 鈮?0.6 涓澘鍗婂 鈬?涓嶈ˉ灏辨槸绯荤粺鎬у亸銆?+      if (lead_s != 0.0) {
++        const double rx = plate[0] - x[0];
++        const double ry = plate[1] - x[2];
++        const double h = std::hypot(plate[0], plate[1]);
++        if (h > 0.5) {
++          const double vx_plate = -x[7] * ry;   // v = 蠅 岷?脳 (plate 鈭?center)
++          const double vy_plate = x[7] * rx;
++          aim_yaw +=
++            static_cast<float>((plate[0] * vy_plate - plate[1] * vx_plate) / (h * h) * lead_s);
++        }
++      }
+ 
+       const double nis_failure_rate = target.ekf().data.at("recent_nis_failures");
+       const bool stable = target.is_converged() && frames_since_init >= min_frames_for_fire &&
+@@ -269,8 +327,11 @@ int main(int argc, char * argv[])
+       const bool mode_ok = !require_auto_aim_mode || gimbal.mode() == io::GimbalMode::AUTO_AIM;
+       // 鍚?task_2锛氭病鏈夎娴嬪氨涓嶈寮€鐏€傚墠鍝ㄧ珯涓㈠け瓒呰繃 target_hold_ms 鍚?holding 鍙樺亣锛?       // 浣嗘护娉㈠櫒涓?has_target 閮借繕鍦紝涓嶆尅浣忚繖涓€鏉″氨浼氬鐫€鍐荤粨鐨勫鎺ㄨ搴︿竴鐩存墦銆?+      //
++      // 鏂板锛氫汉鎸変綇 F 鎵嶅厑璁稿紑鐏紙榛樿鍏筹級銆備綆浣嶉澏瑙勫垯鍦ㄤ换鍔′笁宸叉憳闄わ紙瑙佷笂闈㈢殑璇存槑锛夈€?+      const bool key_ok = !fire_key_enabled || fire_key_gate.allowed();
+       const bool fire =
+-        has_detection && stable && interval_ok && rounds_ok && mode_ok && !holding;
++        has_detection && stable && interval_ok && rounds_ok && mode_ok && !holding && key_ok;
+ 
+       if (fire) {
+         last_fire_time = now;
+@@ -289,6 +350,13 @@ int main(int argc, char * argv[])
+           "{} yaw {:.2f} pitch {:.2f} dist {:.2f} w {:.2f} rounds {}", holding ? "HOLD" : "AIM",
+           aim_yaw, aim_pitch, plate.head(3).norm(), x[7], rounds_this_stage),
+         cv::Point(10, 70), cv::Scalar(0, 255, 255), 1.0, 2);
++      // 鏂板绛栫暐鐨勭姸鎬佹潯
++      tools::draw_text(
++        img,
++        fmt::format(
++          "F={} ({})  浣庝綅闈?{} dz={:.2f}m  鐬勫噯鏉?{}", fire_key_gate.allowed() ? "鎸変綇" : "鏉惧紑",
++          fire_key_gate.backend_name(), low.aim_is_low ? "鏄? : "鍚?, low.dz, aim_id),
++        cv::Point(10, 95), cv::Scalar(0, 255, 255), 0.6, 1);
+ 
+       plotter.plot({
+         {"task3_aim",
+@@ -309,9 +377,12 @@ int main(int argc, char * argv[])
+     hud.draw(img, armors, chosen, frame_id, has_target, holding);
+ 
+     cv::imshow("task3", img);
+-    if (cv::waitKey(1) == 'q') {
++    const int key_code = cv::waitKey(1);
++    if (key_code == 'q') {
+       break;
+     }
++    // F 閿殑鍏滃簳閫氶亾锛氬彧鏈夊湪鏃㈡病鏈?evdev銆佸張涓嶆槸缁堢鐨勬椂鍊欐墠璧蜂綔鐢?+    if (fire_key_gate.uses_window_fallback()) fire_key_gate.feed(key_code);
+ 
+     // Your code end
+   }
+
+### ===== src\task_common.hpp =====
+diff --git "a/D:\\DSH\\fp_aim\\src\\task_common.hpp" "b/D:\\MTG\\Documents\\OC\\fp_aim_fkey\\src\\task_common.hpp"
+index df6792b..3f43c85 100644
+--- a/src\task_common.hpp
++++ b/src\task_common.hpp
+@@ -58,14 +58,20 @@ inline uint8_t to_target_id(auto_aim::ArmorName name)
+ //   绗?1 姝?鎻愬墠閲忥細鎶娿€屾棆杞腑蹇冨埌瑁呯敳鏉裤€嶇殑鍚戦噺鎸夎閫熷害杞繃寮逛父椋炶鏃堕棿锛? //                   鍐嶅姞涓婃棆杞腑蹇冭嚜韬殑骞崇Щ浣嶇Щ銆倄 鐨勪笅鏍囧惈涔夎 target.cpp 鐨勭姸鎬佸悜閲忔敞閲娿€? //   绗?2 姝?寮归亾锛氭妸姘村钩璺濈涓庨珮搴﹀樊浜ょ粰 tools::Trajectory锛?-//                 鑰冭檻閲嶅姏涓庣┖姘旈樆鍔涳紝涓€娆℃嬁鍒扮湡瀹炵殑 pitch 鍜岄琛屾椂闂达紱
+-//                 鍐嶇敤杩欎釜椋炶鏃堕棿鍥炲埌绗?1 姝ラ噸绠楁彁鍓嶉噺锛岃凯浠ｄ袱娆¤冻澶熸敹鏁涖€?+//                   鑰冭檻閲嶅姏涓庣┖姘旈樆鍔涳紝涓€娆℃嬁鍒扮湡瀹炵殑 pitch 鍜岄琛屾椂闂达紱
++//                   鍐嶇敤杩欎釜椋炶鏃堕棿鍥炲埌绗?1 姝ラ噸绠楁彁鍓嶉噺锛岃凯浠ｄ袱娆¤冻澶熸敹鏁涖€?+//
++//   t_extra锛氶琛屾椂闂翠箣澶栫殑**棰濆绛夊緟鏃堕棿**锛堢锛夈€傜敤鏉ユ妸銆屾懇鎿﹁疆鍚姩鍒板瓙寮瑰嚭鑶涖€?+//             杩欐寤舵椂绠楄繘棰勬祴鈥斺€斿畼鏂?sp_vision_25 鍦?aimer.cpp 鐨勬敞閲婇噷鍐欑殑鏄?+//             銆宒etector-aimer 鑰楁椂 0.005 + 鍙戝脊寤舵椂 0.1銆嶏紝鍗冲嚭寮规湰韬繕鏈夌害 0.1 s銆?+//             涓嶈ˉ杩欎竴椤癸紝4 rad/s 涓嬩細绯荤粺鎬у亸鏅?0.1*14.55 鈮?1.46掳锛?+//             姣旀澘鍗婂 1.29掳 杩樺ぇ 鈬?鍗婃暟浠ヤ笂蹇呭亸銆傜己鐪?0 = 涓嶆敼鍙樺師鏈夎涓恒€? //
+ // 鐩寸嚎璺濈闄ゅ垵閫熷緱鍒扮殑鏄€屽嚑浣曢琛屾椂闂淬€嶏紝鏃㈡病鏈夐噸鍔涗篃娌℃湁闃诲姏锛? // 鐩存帴鐢ㄥ畠浼氭墦浣庯紙3 绫炽€佸垵閫?25 绫虫瘡绉掓椂閲嶅姏涓嬫矇 0.071 绫筹紝绾?1.35 搴︼級銆? inline void calc_aim(
+   const Eigen::VectorXd & x, const Eigen::Vector4d & plate, double v0, double muzzle_offset_x,
+-  float & yaw, float & pitch)
++  float & yaw, float & pitch, double t_extra = 0.0)
+ {
+   // 鍏堢敤鐩寸嚎璺濈绮椾及涓€娆￠琛屾椂闂?   double t_flight = plate.head(3).norm() / v0;
+@@ -73,7 +79,7 @@ inline void calc_aim(
+   double pitch_rad = tools::xyz2ypd(plate.head(3))[1];
+ 
+   for (int iter = 0; iter < 2; ++iter) {
+-    const double da = x[7] * t_flight;  // x[7] 鏄?EKF 鎷熷悎鍑烘潵鐨勮閫熷害
++    const double da = x[7] * (t_flight + t_extra);  // x[7] 鏄?EKF 鎷熷悎鍑烘潵鐨勮閫熷害
+     const double ca = std::cos(da), sa = std::sin(da);
+     const double rx = plate[0] - x[0];
+     const double ry = plate[1] - x[2];
+
+### ===== CMakeLists.txt =====
+diff --git "a/D:\\DSH\\fp_aim\\CMakeLists.txt" "b/D:\\MTG\\Documents\\OC\\fp_aim_fkey\\CMakeLists.txt"
+index 9fc8efd..d6b1034 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -29,6 +29,11 @@ add_executable(task_1 src/task_1.cpp)
+ add_executable(task_2 src/task_2.cpp)
+ add_executable(task_3 src/task_3.cpp)
+ 
++# 鎸夐敭闂ㄨ嚜娴嬬▼搴忥細鍙緷璧?src/fire_key.hpp锛堥浂宸ョ▼渚濊禆锛夛紝涓嶇鐩告満/浜戝彴/Eigen銆?+# 鐢ㄩ€旓細涓婅溅鍓嶅厛纭 F 閿€氶亾閫氫笉閫氾紙backend 鏄?evdev 杩樻槸 cvkey 鍏滃簳锛夈€?+#   ./build/keytest
++add_executable(keytest tools/keytest.cpp)
++
+ target_link_libraries(task_1 ${OpenCV_LIBS} auto_aim fmt::fmt yaml-cpp tools io)
+ target_link_libraries(task_2 ${OpenCV_LIBS} auto_aim fmt::fmt yaml-cpp tools io)
+ target_link_libraries(task_3 ${OpenCV_LIBS} auto_aim fmt::fmt yaml-cpp tools io)
+\ No newline at end of file

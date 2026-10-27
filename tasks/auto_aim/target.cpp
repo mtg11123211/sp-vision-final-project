@@ -33,6 +33,14 @@ namespace
 //   ekf/residual_yaw、ekf/residual_distance、ekf/nis 三条曲线，
 // 残差应当零均值、nis 应当围绕量测维数 4 上下波动，长期偏大说明 Q 太小或 R 太大。
 constexpr double kV1Car = 4.0;       // 车体线加速度方差，标准差 2 米每二次方秒
+
+// ---- F3（2026-10-27）NIS 拒收时的协方差膨胀参数 ----
+// 旧逻辑拒收后把 P 原样回滚 = 滤波器永远不承认"我可能错了"：下一帧 S 不变大、
+// NIS 不下降，帧帧拒收正反馈锁死（死锁根因之一）。新逻辑：拒收时保留 x 回滚，
+// 但把 P 放大 kRejectPInflate 倍——S 随之变大、NIS 自动回落，同样的误差从
+// 「离谱观测」变回「可接受」，状态被正常拉回。上限防连续拒收时指数爆炸。
+constexpr double kRejectPInflate = 10.0;     // 每次拒收 P 的放大倍数
+constexpr double kRejectPInflateCap = 500.0; // 对角元上限：超过就不再放大（P0 的 w 项本就是 100）
 constexpr double kV2Car = 16.0;      // 车体角加速度方差，标准差 4 弧度每二次方秒
 constexpr double kV1CarZ = 1.0;      // 车体竖直方向线加速度方差，标准差 1 米每二次方秒
 constexpr double kV1Outpost = 0.01;  // 前哨站线加速度方差，标准差 0.1 米每二次方秒
@@ -72,6 +80,20 @@ Target::Target(
   auto center_x = xyz[0] + r * std::cos(ypr[0]);
   auto center_y = xyz[1] + r * std::sin(ypr[0]);
   auto center_z = xyz[2];
+
+  // ---- F4 构造门禁（2026-10-27）：防「一帧毒」----
+  // 初值全部来自这一帧的 PnP：如果恰好是斜板/半遮挡的坏帧，center_z 会被带偏 0.5 m，
+  // 而前哨站几何列全程冻结、滤波器学不回来 ⇒ 一场报废。这里做合理性钳位：
+  // 界外直接判死刑（valid()=false），主循环不采用它，下一帧再试。
+  // 现场如需放宽：设 DSH_NO_ZCLAMP=1 关掉这道门。
+  if (is_layered_outpost()) {
+    const bool clamp_on = std::getenv("DSH_NO_ZCLAMP") == nullptr;
+    if (clamp_on && (center_z < 0.8 || center_z > 1.6)) {
+      valid_ = false;
+      tools::logger()->warn(
+        "[Target] 前哨站 center_z={:.2f} m 越出 [0.8,1.6]，疑似坏帧，拒绝入役", center_z);
+    }
+  }
 
   // x vx y vy z vz a w r l h
   // a: angle
@@ -317,8 +339,14 @@ bool Target::update_checked(const Armor & armor, double nis_reject_threshold)
   // 与当前模型严重不符，多半是关联错了板，或者混进了不属于本模型的装甲板
   // （例如前哨站顶部的第四块板）。
   if (ekf_.last_nis > nis_reject_threshold) {
+    reject_streak_++;  // F1：连续拒收计数（接受即清零，见函数尾部）；超 20 帧触发 needs_reinit()
+
+    // ---- F3：x 回滚、P 膨胀（不再原样回滚 P）----
+    // x 回滚：不采信这一帧脏观测；P 膨胀：承认"我可能错了"。
+    // 没有膨胀时的死锁链：P 不变 ⇒ S 不变 ⇒ NIS 帧帧超阈 ⇒ 帧帧拒收 ⇒ 永久锁死。
     ekf_.x = x_before;
     ekf_.P = P_before;
+    if (ekf_.P.diagonal().maxCoeff() < kRejectPInflateCap) ekf_.P *= kRejectPInflate;
     // 这一帧的失败标记已经进了 EKF 内部「最近 NIS 失败率」的滑动窗口，但观测被拒收、
     // 状态也已回滚，它不该继续算在失败率里。否则连续几帧拒收就会把失败率顶到 1.0，
     // 而这个窗口长 100 帧（58 帧每秒约 1.7 秒），stable 会一直为假 —— 现场表现是
@@ -337,6 +365,7 @@ bool Target::update_checked(const Armor & armor, double nis_reject_threshold)
     tools::logger()->debug("[Target] NIS {:.2f} over threshold, measurement rejected", ekf_.last_nis);
     return false;
   }
+  reject_streak_ = 0;  // F1：只要有一帧被接受，连续计数归零（锁死只能靠"连续"拒收形成）
   return true;
 }
 

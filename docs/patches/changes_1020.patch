@@ -1,0 +1,483 @@
+diff --git a/configs/standard.yaml b/configs/standard.yaml
+index aa0701a..c1c1b57 100644
+--- a/configs/standard.yaml
++++ b/configs/standard.yaml
+@@ -6,18 +6,24 @@ rotation_angle: 0
+ yolo_name: yolov5
+ yolov5_model_path: assets/yolov5.xml
+ device: GPU
+-min_confidence: 0.8
++min_confidence: 0.88
+ use_traditional: true
+ roi:
+-  x: 460
+-  y: 200
+-  width: 600
+-  height: 600
+-use_roi: false
++  x: 304
++  y: 152
++  width: 800
++  height: 800
++use_roi: true
+ threshold: 100
+ 
+-yaw_offset: 2 # degree -2.5
+-pitch_offset: 6.5 # degree 2
++# yaw_offset / pitch_offset：加在 calc_aim 算出的世界系绝对角上的固定角偏置（单位：度）。
++# 它们只该补「不随距离变的固定角偏差」——电控 pitch 零位、相机安装角这类。
++# 历史值 2 / 6.5 / 10.24 都是“验证这两个变量有没有生效”时随手写的探针值，不是标定结果，
++# 所以基准一律取 0；真要有偏差，用 3 发静止靶量出来再写，别凭感觉填。
++# 现场临时试验可以用环境变量覆盖，不用改这里：
++#   DSH_YAW_OFFSET=0.3 DSH_PITCH_OFFSET=-1.2 ./build/task_2 configs/standard.yaml
++yaw_offset: 0.0
++pitch_offset: 0.0
+ 
+ camera_name: "hikrobot"
+ exposure_ms: 2.5
+@@ -53,22 +59,30 @@ target_hold_ms: 300
+ # （4 自由度下 95% 分位是 9.488、99% 是 13.28、99.9% 是 18.47，可以按需加减）
+ nis_reject_threshold: 16.27
+ # 滤波器建立后至少跑多少帧才允许开火（真正的收敛判据之一）
+-min_frames_for_fire: 15
++# 15 帧 = 58 fps 下 0.26 秒；开着录包会掉到 45 fps，就变成 0.33 秒，白丢 1-2 发。
++# 10 帧 = 0.17-0.22 秒，够滤波收敛，又不会把第一发拖太久。
++min_frames_for_fire: 10
+ # recent_nis_failures 低于这个值才认为滤波器健康
+ max_nis_failure_rate: 0.3
+ 
+ #####-----任务二（中低速小陀螺，弹频 5 赫兹、每个转速只许 10 发）-----#####
+ task2:
+-  fire_interval_s: 0.2        # 5 赫兹
+-  max_rounds_per_stage: 10    # 每个转速挡位最多 10 发，超出部分不计分
++  fire_interval_s: 0.2         # 开火节流：>=0.2 s，即 5 赫兹（赛规给的就是 5 Hz，照抄最稳）
++                               # 防「同一块板连吃两发」不靠这个值，靠 plate_armed：
++                               # 打完一发要摆出 DSH_PLATE_REARM_DEG(35°) 或换板才重新上膛，
++                               # 0.2 s 时板子只转过 46°，摆出角度前 facing 已经出窗口了。
++  max_rounds_per_stage: 0      # 不限发数
+   # 转速挡位切换的判定窗口：超过这个时间没有新弹丸，且拟合角速度换了挡，
+   # 就认为一个转速挡位结束、重新开始计数；超过 3 倍这个时间则一律重新计数。
+   stage_gap_s: 5.0
+   # 低转速与中转速的分界，要求里写的是 5 弧度每秒
+   speed_band_split: 5.0
+   # 是否要求云台处于自瞄挡位才接管控制。
+-  # 先用 false 跑一次，确认终端日志里 mode 确实是 AUTO_AIM 之后再改成 true。
+-  require_auto_aim_mode: false
++  # 现场日志已连续确认 `[dbg] 电控挡位 = AUTO_AIM(自瞄)`，所以置 true：
++  # 电控被拨回手动时软件会主动交权、不再请求开火（否则会出现 rounds 一路涨、
++  # 车上 bullet_count 一动不动的情况，白耗一整个挡位的额度）。
++  # 如果场上电控挡位会抖，改回 false 才是保险的——代价是 IDLE 时也会空转请求。
++  require_auto_aim_mode: true
+ 
+ #####-----任务三（前哨站，弹频 12 赫兹）-----#####
+ task3:
+diff --git a/src/task_2.cpp b/src/task_2.cpp
+index 751c9c7..944822d 100644
+--- a/src/task_2.cpp
++++ b/src/task_2.cpp
+@@ -7,6 +7,9 @@
+ #include "fmt/core.h"
+ #include "io/camera.hpp"
+ #include "io/gimbal/gimbal.hpp"
++#include "src/detect_log.hpp"
++#include "src/latency_probe.hpp"
++#include "src/overlay.hpp"
+ #include "src/task_common.hpp"
+ #include "tasks/auto_aim/solver.hpp"
+ #include "tasks/auto_aim/target.hpp"
+@@ -17,6 +20,7 @@
+ #include "tools/math_tools.hpp"
+ #include "tools/plotter.hpp"
+ #include "tools/yaml.hpp"
++#include <cstdlib>
+ 
+ const std::string keys =
+   "{help h usage ? | | 输出命令行参数说明}"
+@@ -61,9 +65,113 @@ int main(int argc, char * argv[])
+   // 是否要求云台处于自瞄挡位才接管控制。默认关，现场确认电控会发 mode=1 之后再打开。
+   const bool require_auto_aim_mode = tools::read_or<bool>(cfg, "require_auto_aim_mode", false);
+ 
++  // 光轴/机械零点补偿（单位：度）。落点偏右就调大 yaw_offset，偏下就调大 pitch_offset。
++  // 现场回滚通道：DSH_YAW_OFFSET / DSH_PITCH_OFFSET（单位也是度）一旦设置就覆盖 yaml。
++  // 把它们设成 0 就等价于「这两个参数还没接进代码」的未启用状态——不改文件、不重编、只重启进程。
++  const double yaw_offset_deg = tools::read_or<double>(yaml, "yaw_offset", 0.0);
++  const double pitch_offset_deg = tools::read_or<double>(yaml, "pitch_offset", 0.0);
++  static const char * env_yaw_offset = std::getenv("DSH_YAW_OFFSET");
++  static const char * env_pitch_offset = std::getenv("DSH_PITCH_OFFSET");
++  const double yaw_offset_eff = env_yaw_offset ? std::atof(env_yaw_offset) : yaw_offset_deg;
++  const double pitch_offset_eff = env_pitch_offset ? std::atof(env_pitch_offset) : pitch_offset_deg;
++  tools::logger()->info(
++    "[task2] offset yaw={:.2f}({}) pitch={:.2f}({})  源: yaml 值 {:.2f}/{:.2f}",
++    yaw_offset_eff, env_yaw_offset ? "env DSH_YAW_OFFSET" : "yaml", pitch_offset_eff,
++    env_pitch_offset ? "env DSH_PITCH_OFFSET" : "yaml", yaw_offset_deg, pitch_offset_deg);
++
++  // ---------------- 云台到位门控 ----------------
++  // 开火前确认炮管真的转到了要求的角度。指令和 fire 是塞在同一个串口包里发出去的
++  // （见后面 gimbal.send），云台从收到角度转到位要几十到上百毫秒，这段时间里打出去的
++  // 弹丸是沿「旧角度」飞的。3 米处落后 1° ≈ 52 毫米，已经接近半块小装甲板（67.5 毫米）。
++  //
++  //   DSH_ARRIVE_DEG 不设（或 <=0）→ 门控完全不生效，行为与之前完全一样（默认）。
++  //   DSH_ARRIVE_DEG=0.5          → yaw、pitch 都在 0.5° 以内才允许开火。
++  //   DSH_ARRIVE_PITCH_DEG=2.0    → pitch 单独放宽（云台俯仰轴慢、且有 10° 的零点补偿）
++  //
++  // 符号约定（两边不一样，别写错了）：
++  //   yaw  ：io/gimbal/gimbal.cpp:106 发出去是同号，:270 回传也原样，所以比「相减」。
++  //   pitch：gimbal.cpp:111 发出去取反（任务一现场实测：板子上移、云台下移，取反是对的），
++  //          而 gimbal.cpp:272 回传是原样拷贝 rx_data_.pitch、没有再翻回来，
++  //          所以到位时满足的是 aim_pitch + fb_pitch ≈ 0，比「相加」。
++  //          这一条是读代码推出来的，第一次上车看 [dbg] arrive 那行的 fb/cmd 就能确认。
++  //
++  // 自动解除机制默认关闭（DSH_ARRIVE_WATCHDOG_SHOTS 缺省 0 = 永不解除）。
++  //
++  // 原来默认 12 发，理由是「宁可打偏、不能一枪不发」。现场跑下来这个理由站不住：
++  // 任务二每个转速挡位只有 10 发额度，而看门狗在第 12 发被挡之后就永久解除门控 ——
++  // 也就是说门控最多只在第一个挡位起作用，后面全程失效，等于白开。
++  // 更糟的是它是「静默失效」：日志里只有一行 warn，人盯着屏幕时看不出门控已经没了。
++  //
++  // 现在改成：不显式给正数就永不解脱，门控一旦打开就一直有效。想临时回到旧行为，
++  // 显式给 DSH_ARRIVE_WATCHDOG_SHOTS=12 即可（只在调试「门限是不是太紧」时用）。
++  // 计数仍然保留：它记录「本来真会打出去、却被门控挡掉」的弹数，是判断门限松紧的
++  // 唯一依据（用发数而不是时长计数，是因为目标时隐时现会把计时反复清零）。
++  // 默认就开（0.8°）。显式给 DSH_ARRIVE_DEG=0 才是关闭。
++  // 0.8 = 1.6 × 4 rad/s 下的稳态跟随滞后（≈0.45°），只拦「明显没跟上」的瞬间；
++  // 卡到 0.5 以下会把正常的跟踪滞后也挡掉，一发都打不出去。
++  const double arrive_tol_deg = []() {
++    const char * v = std::getenv("DSH_ARRIVE_DEG");
++    if (v == nullptr || v[0] == '\0') return 0.8;
++    return std::atof(v);
++  }();
++  // pitch 单独的门限：不设就跟 yaw 一样放宽 1.6 倍（0.5° → 0.8°）。
++  // pitch 轴拖着零点补偿去追，常常比 yaw 慢，卡同一个数会让门控频繁误挡。
++  const double arrive_tol_pitch_deg = [&]() {
++    const char * v = std::getenv("DSH_ARRIVE_PITCH_DEG");
++    if (v == nullptr || v[0] == '\0') return arrive_tol_deg * 1.6;
++    return std::atof(v);
++  }();
++  // 连续多少帧落在门限内才放行（3 帧 ≈ 50 ms @60 fps）。
++  // 只卡单帧的话，云台扫过 0.5° 那一瞬间就会被判到位，等于没卡。
++  const int arrive_frames_needed = []() {
++    const char * v = std::getenv("DSH_ARRIVE_FRAMES");
++    if (v == nullptr || v[0] == '\0') return 3;
++    const int n = std::atoi(v);
++    return n > 0 ? n : 1;
++  }();
++
++  // ---- 板面朝向门控 ----
++  // 旋转靶一圈四块板，只有板面大致正对镜头那一下才打得中：别的角度打出去，
++  // 弹道要么擦边、要么落在两块板中间的空当里，看起来就是「明明瞄了却没打中」。
++  // 判定用的角度：板的外法线方向与「目标中心指向相机」的方向之差，0° = 正对。
++  // 板位置 = 中心 − r(cos a, sin a)（target.cpp:404-405），所以外法线就是 a + π。
++  const double plate_facing_deg = []() {
++    const char * v = std::getenv("DSH_PLATE_FACING_DEG");
++    if (v == nullptr || v[0] == '\0') return 25.0;  // 四块板 90° 一块，正对窗口约 50°
++    return std::atof(v);
++  }();
++  // 「一块板只打一发」：打完这一发后，同一块板必须摆出这个角度之外（或换成别的板），
++  // 才重新允许开火。比 facing 大 10° 左右，避免在临界上来回抖着放行。
++  const double plate_rearm_deg = []() {
++    const char * v = std::getenv("DSH_PLATE_REARM_DEG");
++    if (v == nullptr || v[0] == '\0') return 35.0;
++    return std::atof(v);
++  }();
++  // 缺省 0 = 永不自动解脱。给正数才启用「挡满 N 发就解除门控」的旧行为。
++  const int arrive_watchdog_shots = []() {
++    const char * v = std::getenv("DSH_ARRIVE_WATCHDOG_SHOTS");
++    if (v == nullptr || v[0] == '\0') return 0;
++    const int n = std::atoi(v);
++    return n > 0 ? n : 0;
++  }();
++  // 一行把「这次到底允许怎么开火」全打出来。参数改错时，看这一行比看代码快。
++  tools::logger()->info(
++    "[task2] 到位门控 = {}（yaw {:.2f}° / pitch {:.2f}°，连续 {} 帧）｜看门狗 {}｜"
++    "板面正对 ±{:.0f}°、摆出 {:.0f}° 才重新上膛（一块板只打一发）｜发弹间隔 {:.2f} s",
++    arrive_tol_deg > 0.0 ? "开" : "关", arrive_tol_deg, arrive_tol_pitch_deg,
++    arrive_frames_needed,
++    arrive_watchdog_shots > 0 ? std::to_string(arrive_watchdog_shots) + " 发后解除" : "关",
++    plate_facing_deg, plate_rearm_deg, fire_interval_s);
++
+   // 初始化工具类
+   tools::Exiter exiter;
+   tools::Plotter plotter;  // 注意plotter工具的使用
++  // 现场测量探针：DSH_LAT_CSV 没设就什么都不做
++  probe::Latency latency;
++  // 检测日志：DSH_DET_CSV 没设就什么都不做；离线调 EKF 靠它
++  detect_log::DetectLog detlog;
++  // 窗口上的状态条：每帧都画，用来证明「还在画」而不是窗口冻住了
++  overlay::Hud hud;
+ 
+   // 初始化io类
+   io::Camera camera(config_path);
+@@ -96,6 +204,20 @@ int main(int argc, char * argv[])
+   int speed_band = -1;
+   int band_at_last_round = -1;
+ 
++  // ---- 到位门控的跨帧状态 ----
++  bool arrive_tripped = false;     // 看门狗是否已经解除门控（本进程内不再恢复）
++  int arrive_blocked_shots = 0;    // 累计被门控挡掉、本来真会打出去的弹数
++  double arrive_err_min = 0.0;     // 统计窗口内 yaw 差的最小/最大值
++  double arrive_err_max = 0.0;
++  bool arrive_err_seen = false;
++  int arrive_err_frames = 0;
++
++  // ---- 开火节奏的跨帧状态 ----
++  int arrive_ok_streak = 0;   // 连续落在到位门限内的帧数（防单帧蒙混过关）
++  int last_fired_plate = -1;  // 上一发打的是哪一块板（armor id，0..3）
++  bool plate_armed = true;    // 这块板是否已上膛（打完要摆出窗口再回来）
++
++  const auto t_start = std::chrono::steady_clock::now();
+   while (!exiter.exit()) {
+     // Your code start
+ 
+@@ -103,14 +225,31 @@ int main(int argc, char * argv[])
+     if (img.empty()) {
+       continue;  // 相机偶尔给空帧，跳过本轮，不发送任何指令
+     }
++    // 测量：取到帧的时刻 + 这一帧的曝光时间戳
++    latency.on_grab(t, camera.dev_ts());
+ 
+     // 用照片曝光时刻对齐云台姿态
+     q = gimbal.q(t);
+     solver.set_R_gimbal2world(q);
+ 
+-    auto armors = yolo.detect(img, frame_count++);
++    if (frame_count % 48 == 0)
++    {
++      const char * gear = "?";
++      switch (gimbal.mode())
++      {
++        case io::GimbalMode::IDLE: gear = "IDLE(手动/未接管)"; break;
++        case io::GimbalMode::AUTO_AIM: gear = "AUTO_AIM(自瞄)"; break;
++        case io::GimbalMode::SMALL_BUFF: gear = "SMALL_BUFF(小陀螺)"; break;
++        case io::GimbalMode::BIG_BUFF: gear = "BIG_BUFF(大陀螺)"; break;
++      }
++      tools::logger()->info("[dbg] 电控挡位 = {}", gear);
++    }
++    const int frame_id = frame_count++;
++    auto armors = yolo.detect(img, frame_id);
+     const auto gimbal_state = gimbal.state();
+     const auto now = std::chrono::steady_clock::now();
++    // 离线复现用：这一帧看到的所有板子（颜色、编号、置信度、四个角点）
++    detlog.on_frame(frame_id, tools::delta_time(now, t_start), armors);
+ 
+     // ---- 发弹计数 ----
+     // 电控上报的 bullet_count 是累计发弹数，最准；万一这个字段没接，
+@@ -181,6 +320,8 @@ int main(int argc, char * argv[])
+       }
+       if (chosen != nullptr) solver.solve(*chosen);
+     }
++    // 测量：推理 + 解算到此为止，后面只剩发指令
++    latency.on_infer(std::chrono::steady_clock::now());
+ 
+     const bool has_detection = (chosen != nullptr);
+     // 短暂丢失：还在保持时间内就继续用滤波器外推，不松开云台
+@@ -231,8 +372,48 @@ int main(int argc, char * argv[])
+       const auto xyza_list = target.armor_xyza_list();
+       int aim_id = target.last_id;
+       if (aim_id < 0 || aim_id >= static_cast<int>(xyza_list.size())) aim_id = 0;
++
++      // ---- 选「最正对镜头」的那块板 ----
++      // EKF 关联出来的 last_id 可能是刚转过去、马上要离开视野的那一块（关联只按角度最近，
++      // 不管它正面朝哪）。这里再按几何挑一次：四块板里谁的法线最接近视线就瞄谁，
++      // 也就是「只打转到中间的那块，不追着快转走的那块」。
++      // 判定角度 = 板的外法线（a + π）与「目标中心指向相机」的方向之差，0° = 正对。
++      const double center_bearing = std::atan2(-x[2], -x[0]);
++      const auto facing_of = [&](const Eigen::Vector4d & p) {
++        return tools::limit_rad(p(3) + M_PI - center_bearing) * 57.29577951308232;
++      };
++      int best_id = aim_id;
++      double best_facing = std::abs(facing_of(xyza_list[aim_id]));
++      // 约定自检：EKF 关联出来的那块板**一定是我们能看见的那块**（检测到了才有观测），
++      // 所以它的 facing 必然接近 0。如果这一项长期是 ±150° 以上，说明
++      // 「a 是朝外还是在朝里」这个约定反了，把 facing_of 里的 `+ M_PI` 去掉即可。
++      const double assoc_facing_deg = best_facing;
++      for (int i = 0; i < static_cast<int>(xyza_list.size()); ++i) {
++        const double f = std::abs(facing_of(xyza_list[i]));
++        if (f < best_facing) {
++          best_facing = f;
++          best_id = i;
++        }
++      }
++      // 只有明显更好（多 5° 以上）才换板，避免在临界角上来回跳
++      if (best_id != aim_id && best_facing + 5.0 < std::abs(facing_of(xyza_list[aim_id]))) {
++        aim_id = best_id;
++      }
+       const Eigen::Vector4d plate = xyza_list[aim_id];
+ 
++      const double facing_deg = facing_of(plate);
++      const bool facing_ok = std::abs(facing_deg) <= plate_facing_deg;
++      // 一块板只打一发：换板、或同一块板摆出 rearm 角，才重新上膛。
++      // 没有这条，程序会在板子转走的整段时间里追着它连打，一串弹全落在空当里。
++      //
++      // 这里必须**每帧现算**，不能用「置位保持」的写法，保持版有两个洞：
++      //   ① 静止靶不转，永远摆不出 rearm 角 ⇒ 打完一发就永久锁死；而零位标定正好要用静止靶连打 3 发。
++      //   ② aim_id 从 A 跳到 B 再跳回 A 时，A 没摆出角度也会带着「已上膛」回来。
++      const bool target_static = std::abs(x[7]) < 0.5;  // rad/s；低于 0.5 就当靶子没在转
++      plate_armed = target_static || (aim_id != last_fired_plate) ||
++                    (std::abs(facing_deg) > plate_rearm_deg);
++      const bool plate_ok = facing_ok && plate_armed;
++
+       // 弹速：电控不可用时用配置里的兜底值，并且只告警一次
+       double bullet_speed = gimbal_state.bullet_speed;
+       if (bullet_speed < 5.0) {
+@@ -250,6 +431,30 @@ int main(int argc, char * argv[])
+       float aim_yaw = 0.0f;
+       float aim_pitch = 0.0f;
+       task_common::calc_aim(x, plate, bullet_speed, muzzle_offset_x, aim_yaw, aim_pitch);
++      // 光轴补偿：把瞄准线掰回炮口实际指向（正 yaw = 往左，正 pitch = 往上）
++      // 动态滞后补偿：相机曝光+取流+解算+串口的固定滞后（秒），按角速度补；DSH_LEAD 可调
++      static const double lead_s = []() { const char * v = std::getenv("DSH_LEAD"); return v ? std::atof(v) : 0.0; }();
++      // 延迟补偿用「板在相机里看到的角速度」，不是目标自转角速度 —— 两者差 d/r ≈ 16 倍，而且
++      // **符号是反的**：近侧板往右走（视在 yaw 变小）对应的是 ω > 0，直接乘 ω 会把准星往左推。
++      // 板的速度 v = ω ẑ × (plate − center)，相机角速度 d(yaw)/dt = (x·vy − y·vx)/h²。
++      // DSH_LEAD 单位是秒：0.057 就是 57 ms 的链路滞后。
++      if (lead_s != 0.0) {
++        const double rx = plate[0] - x[0];
++        const double ry = plate[1] - x[2];
++        const double h = std::hypot(plate[0], plate[1]);
++        if (h > 0.5) {
++          const double vx_plate = -x[7] * ry;
++          const double vy_plate = x[7] * rx;
++          aim_yaw +=
++            static_cast<float>((plate[0] * vy_plate - plate[1] * vx_plate) / (h * h) * lead_s);
++        }
++      }
++      aim_yaw += static_cast<float>(yaw_offset_eff * 0.017453292519943295);
++      aim_pitch += static_cast<float>(pitch_offset_eff * 0.017453292519943295);
++
++      // 阶跃测试：只在 DSH_STEP_DEG 打开时生效，把 1 Hz 方波直接叠在 yaw 指令上。
++      // 命令是方波、反馈（下面的 fb_yaw）是爬升曲线，两者一叠就是云台的到位时间。
++      if (latency.step_enabled()) aim_yaw += latency.step_delta(now);
+ 
+       // ---- 开火判定 ----
+       // 原来的 is_converged() 展开就是「几何没跑飞」，第二帧就为真，等于一直在请求开火。
+@@ -262,19 +467,104 @@ int main(int argc, char * argv[])
+       const bool rounds_ok =
+         (max_rounds_per_stage <= 0) || (rounds_this_stage < max_rounds_per_stage);
+       const bool mode_ok = !require_auto_aim_mode || gimbal.mode() == io::GimbalMode::AUTO_AIM;
+-      // 只有这一帧真的有观测才开火：靠外推硬打出去多半白费弹药
+-      const bool fire = stable && interval_ok && rounds_ok && mode_ok && !holding;
++
++      // ---- 云台到位判定 ----
++      // 差值按 ±180° 展开，只看 yaw（gimbal.cpp:106 里 yaw 同号，可比）。
++      double dyaw = static_cast<double>(aim_yaw) - static_cast<double>(gimbal_state.yaw);
++      while (dyaw > M_PI) dyaw -= 2.0 * M_PI;
++      while (dyaw < -M_PI) dyaw += 2.0 * M_PI;
++      const double yaw_err_deg = std::abs(dyaw) * 57.29577951308232;
++
++      // pitch 用「相加」：发指令时 gimbal.cpp:111 取了反，回传 gimbal.cpp:272 没翻回来，
++      // 所以到位时 aim_pitch + fb_pitch ≈ 0。写成减法就会得到一个恒等于 2×pitch 的假误差，
++      // 门控会一直挡——这也是第一次上车要看 [task2] 那行 cmd/fb 的原因。
++      const double pitch_err_deg =
++        std::abs(static_cast<double>(aim_pitch) + static_cast<double>(gimbal_state.pitch)) *
++        57.29577951308232;
++
++      // 不管门控开没开都统计 yaw 差值：它就是「云台跟踪滞后」，
++      // 也是判断门限设得对不对的唯一依据（静止靶应当接近 0，转靶才是真实滞后）。
++      if (!arrive_err_seen) {
++        arrive_err_min = arrive_err_max = yaw_err_deg;
++        arrive_err_seen = true;
++      } else {
++        if (yaw_err_deg < arrive_err_min) arrive_err_min = yaw_err_deg;
++        if (yaw_err_deg > arrive_err_max) arrive_err_max = yaw_err_deg;
++      }
++      arrive_err_frames++;
++
++      const bool arrive_on = arrive_tol_deg > 0.0 && !arrive_tripped;
++      // 要求连续 N 帧都在门限内：云台扫过 0.5° 的那一瞬间也会「看起来到位」，
++      // 只卡单帧等于没卡，这一条就是防这个的。
++      const bool arrive_in_tol =
++        yaw_err_deg < arrive_tol_deg && pitch_err_deg < arrive_tol_pitch_deg;
++      arrive_ok_streak = (arrive_in_tol && !arrive_tripped) ? arrive_ok_streak + 1 : 0;
++      const bool arrive_ok =
++        !arrive_on || (arrive_in_tol && arrive_ok_streak >= arrive_frames_needed);
++
++      // 只有这一帧真的有观测才开火。原来这句只写在注释里，代码没兑现：
++      // 目标丢失超过 target_hold_ms 之后 holding 变假，但 has_target 和滤波器状态都原样保留
++      // （is_converged_ 停在最后一次 update 的值，frames_since_init 也停在上次的数），
++      // 于是 fire 会在视野里什么都没有的情况下持续为真，每隔 fire_interval_s 打一发空枪。
++      // 现场那次 rounds 333 就是这么来的：333 乘 0.2 秒约 67 秒，正好一整场。
++      if (frame_count % 48 == 0)
++      {
++        tools::logger()->info(
++          "[dbg] fire-gate stable={} conv={} frames={}/{} nis={:.2f}/{:.2f} interval={} rounds={} mode={} hold={} plate={}({:.0f}°) assoc={:.0f}° | mode_now={} bullet_alive={} rounds {}/{}",
++          stable, target.is_converged(), frames_since_init, min_frames_for_fire,
++          nis_failure_rate, max_nis_failure_rate, interval_ok, rounds_ok, mode_ok, holding,
++          plate_ok, facing_deg, assoc_facing_deg, static_cast<int>(gimbal.mode()),
++          bullet_count_alive, rounds_this_stage, max_rounds_per_stage);
++        // 到位门控的自检行：err/窗口/blocked/tripped 就是「这个参数有没有问题」的证据。
++        //   · 静止靶上 err 长期 > 门限  → 门限太紧或零位偏了
++        //   · tripped=1                 → 看门狗已经替你解除了，本次运行不会再挡
++        //   · blocked 一直是 0 而 tripped=0 → 门控从来没起作用（没碰到需要它的场景）
++        //   · 末尾的 fb/cmd 是符号判据：到位时 fb yaw ≈ cmd yaw、fb pitch ≈ −cmd pitch。
++        //     若 fb pitch ≈ +cmd pitch，说明我这条 pitch 相加的约定错了，改一行即可。
++        tools::logger()->info(
++          "[dbg] arrive={} tol={:.2f}/{:.2f}° errY={:.2f}° errP={:.2f}° Ymin/max={:.2f}/{:.2f} n={} "
++          "blocked={} tripped={} | fb yaw={:.2f} pitch={:.2f} cmd yaw={:.2f} pitch={:.2f}",
++          arrive_on, arrive_tol_deg, arrive_tol_pitch_deg, yaw_err_deg, pitch_err_deg,
++          arrive_err_min, arrive_err_max, arrive_err_frames, arrive_blocked_shots, arrive_tripped,
++          gimbal_state.yaw, gimbal_state.pitch, aim_yaw, aim_pitch);
++        arrive_err_seen = false;  // 下一行重新统计，每行覆盖约 0.8 秒
++        arrive_err_frames = 0;
++      }
++      const bool would_fire =
++        has_detection && stable && interval_ok && rounds_ok && mode_ok && !holding && plate_ok;
++      const bool fire = would_fire && arrive_ok && !latency.step_enabled();  // 阶跃测试期间一律不放弹
++
++      // 看门狗：只有「本来真会打出去的那一发被挡了」才算损失，才计数
++      if (arrive_on && !arrive_ok && would_fire) {
++        arrive_blocked_shots++;
++        if (arrive_watchdog_shots > 0 && arrive_blocked_shots >= arrive_watchdog_shots) {
++          arrive_tripped = true;
++          tools::logger()->warn(
++            "[task2] 到位门控已累计挡掉 {} 发（当前 yaw 差 {:.2f}° > 门限 {:.2f}°），"
++            "判定门限过紧或 yaw 零位有固定偏差，本次运行已自动解除门控（改 DSH_ARRIVE_DEG "
++            "后重启生效）",
++            arrive_blocked_shots, yaw_err_deg, arrive_tol_deg);
++        }
++      }
+ 
+       if (fire) {
+         last_fire_time = now;
+         last_round_time = now;
+         band_at_last_round = speed_band;
++        // 记下打的是哪一块板，并把这块板「退膛」：要等它摆出去再转回来才允许再打
++        last_fired_plate = aim_id;
++        plate_armed = false;
+         // 电控没给发弹数时，用自己发出的开火命令计数
+         if (!bullet_count_alive) rounds_this_stage++;
+       }
+ 
+       // 绝对角度控制；mode_ok 为假时交出控制权，避免和人手操作抢云台
+       gimbal.send(mode_ok, fire, aim_yaw, aim_pitch, task_common::to_target_id(target.name));
++      // 测量：串口写完的时刻 + 我们发的角 + 电控这一帧报回来的姿态（fb 是电控坐标系，
++      // 注意 gimbal.send 里 pitch 取过反，比对时两边要统一符号）
++      latency.on_send(
++        std::chrono::steady_clock::now(), aim_yaw, aim_pitch, gimbal_state.yaw,
++        gimbal_state.pitch, fire, static_cast<float>(plate.head(3).norm()));
+ 
+       // ---- 画面 ----
+       if (has_detection) {
+@@ -293,7 +583,12 @@ int main(int argc, char * argv[])
+       // 角速度那条是评分直接看的，残差与 NIS 用来判断滤波器是不是真的收敛了。
+       plotter.plot({
+         {"task2_aim",
+-         {{"yaw", aim_yaw}, {"pitch", aim_pitch}, {"distance", plate.head(3).norm()}}},
++         {{"yaw", aim_yaw},
++          {"pitch", aim_pitch},
++          {"distance", plate.head(3).norm()},
++          // 电控反馈的姿态，和上面两条指令同框显示，就能直接读出云台滞后多少
++          {"fb_yaw", gimbal_state.yaw},
++          {"fb_pitch", gimbal_state.pitch}}},
+         {"task2_ekf",
+          {{"w", x[7]},
+           {"abs_w", std::abs(x[7])},
+@@ -306,6 +601,9 @@ int main(int argc, char * argv[])
+       });
+     }
+ 
++    // 窗口状态条：放在所有分支之外，没目标时也要画，否则看不出程序还活着
++    hud.draw(img, armors, chosen, frame_id, has_target, holding);
++
+     cv::imshow("task2", img);
+     if (cv::waitKey(1) == 'q') {
+       break;

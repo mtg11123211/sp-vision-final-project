@@ -15,6 +15,11 @@ set -euo pipefail
 
 BIN="task_3"
 SRC="src/task_3.cpp"
+# 配置文件：task_3 必须用哨兵配置（rotation 180 / 自己的 pitch_offset 0.0）。
+# 旧版这里硬编码 configs/standard.yaml，是照抄 run2.sh 时漏改的——
+# 哨兵相机倒装，rotation 0 ⇒ 画面上下颠倒必空；pitch 0.5 是 task2 的标定值，套错车。
+# 要临时换：FP_AIM_CFG=configs/xxx.yaml ~/run3.sh
+CFG="${FP_AIM_CFG:-configs/sentry.yaml}"
 PROJ="${FP_AIM_HOME:-$HOME/fp_aim}"
 BUILD=1
 
@@ -28,7 +33,7 @@ done
 
 [ -d "$PROJ" ] || { echo "找不到工程目录：$PROJ" >&2; exit 1; }
 cd "$PROJ"
-[ -f configs/standard.yaml ] || { echo "找不到 configs/standard.yaml（目录不对？）" >&2; exit 1; }
+[ -f "$CFG" ] || { echo "找不到 $CFG（目录不对？FP_AIM_HOME=$PROJ）" >&2; exit 1; }
 
 echo "环境：DSH_RECORD_DIR=${DSH_RECORD_DIR:-未设=不录}  DSH_DET_CSV=${DSH_DET_CSV:-未设=不记}"
 
@@ -61,5 +66,5 @@ if [ "$BUILD" -eq 1 ]; then
   fi
 fi
 
-echo "== 启动（Ctrl-C 退出）=="
-exec "./build/$BIN" configs/standard.yaml
+echo "== 启动（Ctrl-C 退出）：$BIN + $CFG =="
+exec "./build/$BIN" "$CFG"
